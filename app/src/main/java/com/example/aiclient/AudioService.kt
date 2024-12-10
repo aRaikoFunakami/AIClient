@@ -13,6 +13,7 @@ import androidx.core.app.ActivityCompat
 import kotlinx.coroutines.*
 import okhttp3.*
 import org.json.JSONObject
+import java.util.concurrent.atomic.AtomicLong
 
 class AudioService : Service() {
 
@@ -20,7 +21,10 @@ class AudioService : Service() {
         private const val TAG = "AudioService"
         private const val SAMPLE_RATE = 24000
         private const val BLOCK_SIZE = 4800
-        private const val WS_URL = "ws://192.168.1.100:3000/ws" // 実際にアクセス可能なURLに変更すること
+        private const val WS_URL = "ws://192.168.1.100:3000/ws"
+
+        // 無音と判断するまでの待機時間（ミリ秒）
+        private const val SILENCE_THRESHOLD_MS = 1000L
     }
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -31,6 +35,15 @@ class AudioService : Service() {
 
     private var isRunning = false
     private var sendJob: Job? = null
+
+    @Volatile
+    private var isPlayingAudio = false
+
+    // 最後に音声データを受信した時刻をミリ秒単位で記録
+    private val lastAudioReceivedTime = AtomicLong(0)
+
+    // 無音期間をチェックするためのJob
+    private var silenceCheckJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -67,24 +80,21 @@ class AudioService : Service() {
     }
 
     private fun startAudioProcessing() {
-        // AudioRecord初期化
-        val bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         if (ActivityCompat.checkSelfPermission(
                 this,
                 Manifest.permission.RECORD_AUDIO
             ) != PackageManager.PERMISSION_GRANTED
         ) {
-            // TODO: Consider calling
-            //    ActivityCompat#requestPermissions
-            // here to request the missing permissions, and then overriding
-            //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
-            //                                          int[] grantResults)
-            // to handle the case where the user grants the permission. See the documentation
-            // for ActivityCompat#requestPermissions for more details.
             Log.e(TAG, "RECORD_AUDIO permission not granted. Stopping service.")
             stopSelf()
             return
         }
+
+        val bufferSize = AudioRecord.getMinBufferSize(
+            SAMPLE_RATE,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
+        )
         audioRecord = AudioRecord(
             MediaRecorder.AudioSource.MIC,
             SAMPLE_RATE,
@@ -94,7 +104,11 @@ class AudioService : Service() {
         )
 
         // AudioTrack初期化（スピーカー出力用）
-        val outBufferSize = AudioTrack.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        val outBufferSize = AudioTrack.getMinBufferSize(
+            SAMPLE_RATE,
+            AudioFormat.CHANNEL_OUT_MONO,
+            AudioFormat.ENCODING_PCM_16BIT
+        )
         audioTrack = AudioTrack(
             AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -111,7 +125,6 @@ class AudioService : Service() {
         )
         audioTrack?.play()
 
-        // WebSocket接続
         val client = OkHttpClient()
         val request = Request.Builder().url(WS_URL).build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
@@ -124,7 +137,6 @@ class AudioService : Service() {
             }
         })
 
-        // マイク入力→WebSocket送信
         audioRecord?.startRecording()
         sendJob = serviceScope.launch {
             val sendBuffer = ByteArray(BLOCK_SIZE)
@@ -132,16 +144,21 @@ class AudioService : Service() {
             while (isActive && audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
                 val read = audioRecord!!.read(sendBuffer, 0, BLOCK_SIZE)
                 if (read > 0) {
-                    accumulated.addAll(sendBuffer.slice(0 until read))
-                    if (accumulated.size >= BLOCK_SIZE) {
-                        val toSend = accumulated.take(BLOCK_SIZE).toByteArray()
-                        repeat(BLOCK_SIZE) { accumulated.removeAt(0) }
-                        val base64data = Base64.encodeToString(toSend, Base64.NO_WRAP)
-                        val json = JSONObject().apply {
-                            put("type", "input_audio_buffer.append")
-                            put("audio", base64data)
+                    if (!isPlayingAudio) {
+                        accumulated.addAll(sendBuffer.slice(0 until read))
+                        if (accumulated.size >= BLOCK_SIZE) {
+                            val toSend = accumulated.take(BLOCK_SIZE).toByteArray()
+                            repeat(BLOCK_SIZE) { accumulated.removeAt(0) }
+                            val base64data = Base64.encodeToString(toSend, Base64.NO_WRAP)
+                            val json = JSONObject().apply {
+                                put("type", "input_audio_buffer.append")
+                                put("audio", base64data)
+                            }
+                            webSocket?.send(json.toString())
                         }
-                        webSocket?.send(json.toString())
+                    } else {
+                        // 再生中は送信データを捨てる
+                        accumulated.clear()
                     }
                 }
             }
@@ -156,12 +173,34 @@ class AudioService : Service() {
                 val delta = json.optString("delta", "")
                 if (delta.isNotEmpty()) {
                     val decoded = Base64.decode(delta, Base64.NO_WRAP)
-                    // PCMデータをAudioTrackへ書き込む
+                    // 音声受信時に isPlayingAudio を true にする
+                    isPlayingAudio = true
+                    lastAudioReceivedTime.set(System.currentTimeMillis())
+
+                    // 無音チェック用のジョブを再起動
+                    restartSilenceCheckJob()
+
                     audioTrack?.write(decoded, 0, decoded.size)
                 }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to parse message: $text")
+        }
+    }
+
+    private fun restartSilenceCheckJob() {
+        silenceCheckJob?.cancel()
+        silenceCheckJob = serviceScope.launch {
+            // 一定時間（SILENCE_THRESHOLD_MS）後に新規音声がなければ isPlayingAudio = false
+            delay(SILENCE_THRESHOLD_MS)
+            val now = System.currentTimeMillis()
+            val lastTime = lastAudioReceivedTime.get()
+            if (now - lastTime >= SILENCE_THRESHOLD_MS) {
+                isPlayingAudio = false
+                Log.d(TAG, "No audio received for $SILENCE_THRESHOLD_MS ms, isPlayingAudio = false")
+            } else {
+                // もし遅延中にまた音声が来ていたら、何もしない（音声受信時にまた呼び出される）
+            }
         }
     }
 
@@ -178,6 +217,8 @@ class AudioService : Service() {
 
         webSocket?.close(1000, "Service stopped")
         webSocket = null
+
+        silenceCheckJob?.cancel()
 
         isRunning = false
     }
