@@ -6,8 +6,6 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.*
-import android.media.audiofx.AcousticEchoCanceler
-import android.media.audiofx.NoiseSuppressor
 import android.os.IBinder
 import android.util.Base64
 import android.util.Log
@@ -27,9 +25,6 @@ class AudioService : Service() {
 
         // 無音と判断するまでの待機時間（ミリ秒）
         private const val SILENCE_THRESHOLD_MS = 2000L
-
-        // 小さい音を無視する閾値
-        private const val AMPLITUDE_THRESHOLD = 500L
     }
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -108,35 +103,6 @@ class AudioService : Service() {
             AudioFormat.ENCODING_PCM_16BIT,
             bufferSize
         )
-
-        /*
-        // openai側で音声認識が正しくされない
-        audioRecord = AudioRecord(
-            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
-            SAMPLE_RATE,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            bufferSize
-        )
-        *
-        // AEC/NS有効化（必要なら）
-        // MUST: MediaRecorder.AudioSource.VOICE_COMMUNICATION
-        // MUST: 16000 Hz
-        // MUST: android.permission.MODIFY_AUDIO_SETTINGS
-        audioRecord?.audioSessionId?.let { sessionId ->
-            if (AcousticEchoCanceler.isAvailable()) {
-                val aec = AcousticEchoCanceler.create(sessionId)
-                aec?.setEnabled(true)
-                Log.d(TAG, "AcousticEchoCanceler enabled: ${aec?.enabled}")
-            }
-
-            if (NoiseSuppressor.isAvailable()) {
-                val ns = NoiseSuppressor.create(sessionId)
-                ns?.setEnabled(true)
-                Log.d(TAG, "NoiseSuppressor enabled: ${ns?.enabled}")
-            }
-        }
-        */
 
         // AudioTrack初期化（スピーカー出力用）
         val outBufferSize = AudioTrack.getMinBufferSize(
