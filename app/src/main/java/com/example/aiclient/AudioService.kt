@@ -6,6 +6,8 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.*
+import android.media.audiofx.AcousticEchoCanceler
+import android.media.audiofx.NoiseSuppressor
 import android.os.IBinder
 import android.util.Base64
 import android.util.Log
@@ -24,7 +26,10 @@ class AudioService : Service() {
         private const val WS_URL = "ws://192.168.1.100:3000/ws"
 
         // 無音と判断するまでの待機時間（ミリ秒）
-        private const val SILENCE_THRESHOLD_MS = 1000L
+        private const val SILENCE_THRESHOLD_MS = 2000L
+
+        // 小さい音を無視する閾値
+        private const val AMPLITUDE_THRESHOLD = 500L
     }
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -95,6 +100,7 @@ class AudioService : Service() {
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT
         )
+
         audioRecord = AudioRecord(
             MediaRecorder.AudioSource.MIC,
             SAMPLE_RATE,
@@ -102,6 +108,35 @@ class AudioService : Service() {
             AudioFormat.ENCODING_PCM_16BIT,
             bufferSize
         )
+
+        /*
+        // openai側で音声認識が正しくされない
+        audioRecord = AudioRecord(
+            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+            SAMPLE_RATE,
+            AudioFormat.CHANNEL_IN_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+            bufferSize
+        )
+        *
+        // AEC/NS有効化（必要なら）
+        // MUST: MediaRecorder.AudioSource.VOICE_COMMUNICATION
+        // MUST: 16000 Hz
+        // MUST: android.permission.MODIFY_AUDIO_SETTINGS
+        audioRecord?.audioSessionId?.let { sessionId ->
+            if (AcousticEchoCanceler.isAvailable()) {
+                val aec = AcousticEchoCanceler.create(sessionId)
+                aec?.setEnabled(true)
+                Log.d(TAG, "AcousticEchoCanceler enabled: ${aec?.enabled}")
+            }
+
+            if (NoiseSuppressor.isAvailable()) {
+                val ns = NoiseSuppressor.create(sessionId)
+                ns?.setEnabled(true)
+                Log.d(TAG, "NoiseSuppressor enabled: ${ns?.enabled}")
+            }
+        }
+        */
 
         // AudioTrack初期化（スピーカー出力用）
         val outBufferSize = AudioTrack.getMinBufferSize(
@@ -141,28 +176,40 @@ class AudioService : Service() {
         sendJob = serviceScope.launch {
             val sendBuffer = ByteArray(BLOCK_SIZE)
             val accumulated = mutableListOf<Byte>()
+
             while (isActive && audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
                 val read = audioRecord!!.read(sendBuffer, 0, BLOCK_SIZE)
                 if (read > 0) {
-                    if (!isPlayingAudio) {
+                    if (isPlayingAudio) {
+                        accumulated.clear()
+                        Log.d(TAG, "accumulated.clear()")
+                    } else {
+                        // 音声データを蓄積
                         accumulated.addAll(sendBuffer.slice(0 until read))
                         if (accumulated.size >= BLOCK_SIZE) {
                             val toSend = accumulated.take(BLOCK_SIZE).toByteArray()
                             repeat(BLOCK_SIZE) { accumulated.removeAt(0) }
-                            val base64data = Base64.encodeToString(toSend, Base64.NO_WRAP)
-                            val json = JSONObject().apply {
-                                put("type", "input_audio_buffer.append")
-                                put("audio", base64data)
-                            }
-                            webSocket?.send(json.toString())
+                            sendAudio(toSend) // 通常の音声データを送信
+                            Log.d(TAG, "Sent sound data")
+                        }else{
+                            Log.d(TAG, "accumulating sound data")
                         }
-                    } else {
-                        // 再生中は送信データを捨てる
-                        accumulated.clear()
                     }
                 }
             }
+
         }
+    }
+    /**
+     * 音声データをBase64エンコードして送信
+     */
+    private fun sendAudio(data: ByteArray) {
+        val base64data = Base64.encodeToString(data, Base64.NO_WRAP)
+        val json = JSONObject().apply {
+            put("type", "input_audio_buffer.append")
+            put("audio", base64data)
+        }
+        webSocket?.send(json.toString())
     }
 
     private fun handleIncomingMessage(text: String) {
