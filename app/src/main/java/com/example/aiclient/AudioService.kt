@@ -407,6 +407,19 @@ class AudioService : Service() {
     private fun updateTemperature(temp: Int) {
         Log.d(TAG, "Temperature updated to $temp")
         sendTemperatureToActivity(temp)
+        bringMainActivityToFront()
+    }
+
+    /**
+     * MainActivityを全面に出すためのメソッド
+     */
+    private fun bringMainActivityToFront() {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) // 新しいタスクとして起動
+            addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP) // 同じアクティビティがスタックにあればそれを再利用
+            addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP) // 同じアクティビティがフォアグラウンドにある場合に再作成しない
+        }
+        startActivity(intent)
     }
 
     private fun sendTemperatureToActivity(temp: Int) {
