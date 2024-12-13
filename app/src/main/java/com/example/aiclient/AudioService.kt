@@ -225,9 +225,9 @@ class AudioService : Service() {
             when (type) {
                 "response.audio.delta" -> handleAudioDelta(json)
                 "tools.aircontrol" -> handleAirControl(json)
-                "tools.aircontroldelta" -> handleAirControlDelta(json)
-                "tools.searchvideos" -> handleSearchVideos(json)
-                "tools.launchnavigation" -> handleLaunchNavigation(json)
+                "tools.aircontrol_delta" -> handleAirControlDelta(json)
+                "tools.search_videos" -> handleSearchVideos(json)
+                "tools.launch_navigation" -> handleLaunchNavigation(json)
                 else -> Log.w(TAG, "Unhandled type: $type")
             }
         } catch (e: Exception) {
