@@ -20,6 +20,10 @@ import kotlinx.coroutines.*
 import okhttp3.*
 import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicLong
+import org.json.JSONArray
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 
 class AudioService : Service() {
@@ -182,6 +186,7 @@ class AudioService : Service() {
             val sendBuffer = ByteArray(BLOCK_SIZE)
             val accumulated = mutableListOf<Byte>()
 
+            sendVehicleDataAsJson(temp, speed, fuel)
             while (isActive && audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
                 val read = audioRecord!!.read(sendBuffer, 0, BLOCK_SIZE)
                 if (read > 0) {
@@ -209,6 +214,7 @@ class AudioService : Service() {
      * 音声データをBase64エンコードして送信
      */
     private fun sendAudio(data: ByteArray) {
+
         val base64data = Base64.encodeToString(data, Base64.NO_WRAP)
         val json = JSONObject().apply {
             put("type", "input_audio_buffer.append")
@@ -217,16 +223,52 @@ class AudioService : Service() {
         webSocket?.send(json.toString())
     }
 
+    private fun sendVehicleDataAsJson(indoorTemperature: Int, speed: Int, fuel: Int) {
+        val currentDateTime = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.getDefault()).format(Date())
+
+        val vehicleStatusJson = JSONObject().apply {
+            put("description", "This is the current status of the vehicle, including indoor temperature, speed, fuel level, and timestamp.")
+            put("speed", speed)
+            put("indoor_temperature", indoorTemperature) // 車内室温を明示
+            put("fuel_level", fuel)
+            put("timestamp", currentDateTime)
+        }
+
+        val messageJson = JSONObject().apply {
+            put("event_id", "event_${System.currentTimeMillis()}")
+            put("type", "conversation.item.create")
+            put("previous_item_id", JSONObject.NULL)
+            put("item", JSONObject().apply {
+                put("id", "msg_${System.currentTimeMillis()}")
+                put("type", "message")
+                put("role", "user")
+                put("content", JSONArray().apply {
+                    put(JSONObject().apply {
+                        put("type", "input_text")
+                        put("text", vehicleStatusJson.toString()) // JSONを文字列として挿入
+                    })
+                })
+            })
+        }
+
+        webSocket?.send(messageJson.toString())
+        Log.d(TAG, "Sent vehicle data as JSON string with description: $messageJson")
+    }
+
     private fun handleIncomingMessage(text: String) {
         try {
             val json = JSONObject(text)
             val type = json.optString("type", "")
 
             when (type) {
+                // Receive audio from open ai via Copilot
                 "response.audio.delta" -> handleAudioDelta(json)
+                // Receive an order of air control
                 "tools.aircontrol" -> handleAirControl(json)
                 "tools.aircontrol_delta" -> handleAirControlDelta(json)
+                // Receive an order of video search
                 "tools.search_videos" -> handleSearchVideos(json)
+                // Receive an order of launching navigation
                 "tools.launch_navigation" -> handleLaunchNavigation(json)
                 else -> Log.w(TAG, "Unhandled type: $type")
             }
