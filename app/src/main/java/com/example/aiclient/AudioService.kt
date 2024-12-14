@@ -187,13 +187,10 @@ class AudioService : Service() {
         sendJob = serviceScope.launch {
             val sendBuffer = ByteArray(BLOCK_SIZE)
             val accumulated = mutableListOf<Byte>()
-
-            val SILENCE_THRESHOLD = 30.00f // 無音とみなすRMS値
-            val SILENCE_THRESHOLD_MILLIS = 1000L // 無音判定の持続時間（1秒）
-            var silenceDuration = 0L // 無音時間を記録する変数ç
-            var startTime = System.currentTimeMillis()
-
-            sendVehicleDataAsJson(temp, speed, fuel)
+            var silenceDuration = 0L
+            var isAudioSentRecently = false // 直前に音声データが送信されたかを管理するフラグ
+            var lastUpdateTime = System.currentTimeMillis()
+            val SILENCE_THRESHOLD_MILLIS = 1000L
 
             while (isActive && audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
                 val read = audioRecord!!.read(sendBuffer, 0, BLOCK_SIZE)
@@ -201,33 +198,86 @@ class AudioService : Service() {
                     val rms = calculateRMS(sendBuffer, read)
                     val currentTime = System.currentTimeMillis()
 
-                    //Log.e(TAG, "rms: $rms, silenceDuration: $silenceDuration")
-                    if (rms < SILENCE_THRESHOLD) {
-                        // 無音と判定された場合、無音時間を加算
-                        silenceDuration += (currentTime - startTime)
-                    } else {
-                        // 無音でない場合はカウントをリセット
-                        silenceDuration = 0
-                    }
+                    // 無音状態の更新
+                    silenceDuration = updateSilenceDuration(rms, silenceDuration, currentTime, lastUpdateTime)
 
                     if (isPlayingAudio || isSilent(silenceDuration, SILENCE_THRESHOLD_MILLIS)) {
-                        // 無音状態が1秒以上続いた場合に蓄積をクリア
-                        accumulated.clear()
-                        //Log.e(TAG, "accumulated.clear")
+                        resetAccumulation(accumulated)
+                        isAudioSentRecently = false
                     } else {
-                        accumulated.addAll(sendBuffer.slice(0 until read))
-                        if (accumulated.size >= BLOCK_SIZE) {
-                            val toSend = accumulated.take(BLOCK_SIZE).toByteArray()
-                            repeat(BLOCK_SIZE) { accumulated.removeAt(0) }
-                            sendAudio(toSend) // 通常の音声データを送信
-                            //Log.e(TAG, "sendAudio")
+                        addAudioDataToBuffer(accumulated, sendBuffer, read)
+                        if (shouldSendAudio(accumulated)) {
+                            sendBufferedAudio(accumulated, temp, speed, fuel, isAudioSentRecently)
+                            isAudioSentRecently = true
                         }
                     }
-                    startTime = currentTime // 時間を更新
+
+                    lastUpdateTime = currentTime
                 }
             }
         }
     }
+    /**
+     * 無音時間を更新する関数
+     */
+    private fun updateSilenceDuration(
+        rms: Float,
+        silenceDuration: Long,
+        currentTime: Long,
+        lastUpdateTime: Long
+    ): Long {
+        val SILENCE_THRESHOLD = 30.0f
+        return if (rms < SILENCE_THRESHOLD) {
+            silenceDuration + (currentTime - lastUpdateTime)
+        } else {
+            0L
+        }
+    }
+
+    /**
+     * 無音時にデータの蓄積をリセットする関数
+     */
+    private fun resetAccumulation(accumulated: MutableList<Byte>) {
+        accumulated.clear()
+    }
+
+    /**
+     * 音声データをバッファに追加する関数
+     */
+    private fun addAudioDataToBuffer(
+        accumulated: MutableList<Byte>,
+        sendBuffer: ByteArray,
+        read: Int
+    ) {
+        accumulated.addAll(sendBuffer.slice(0 until read))
+    }
+
+    /**
+     * バッファが送信条件を満たしているかを判定する関数
+     */
+    private fun shouldSendAudio(accumulated: MutableList<Byte>): Boolean {
+        return accumulated.size >= BLOCK_SIZE
+    }
+
+    /**
+     * バッファ内の音声データを送信し、必要に応じて車両データを送信する関数
+     */
+    private fun sendBufferedAudio(
+        accumulated: MutableList<Byte>,
+        temp: Int,
+        speed: Int,
+        fuel: Int,
+        isAudioSentRecently: Boolean
+    ) {
+        val toSend = accumulated.take(BLOCK_SIZE).toByteArray()
+        repeat(BLOCK_SIZE) { accumulated.removeAt(0) }
+
+        if (!isAudioSentRecently) {
+            sendVehicleDataAsJson(temp, speed, fuel)
+        }
+        sendAudio(toSend)
+    }
+
     private fun isSilent(silenceDuration: Long, durationThreshold: Long): Boolean {
         return silenceDuration >= durationThreshold
     }
