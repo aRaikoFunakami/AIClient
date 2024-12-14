@@ -309,9 +309,18 @@ class AudioService : Service() {
 
         val vehicleStatusJson = JSONObject().apply {
             put("description", "This is the current status of the vehicle, including indoor temperature, speed, fuel level, and timestamp.")
-            put("speed", speed)
-            put("indoor_temperature", indoorTemperature) // 車内室温を明示
-            put("fuel_level", fuel)
+            put("speed", JSONObject().apply {
+                put("value", speed)
+                put("unit", "km/h") // 速度の単位
+            })
+            put("indoor_temperature", JSONObject().apply {
+                put("value", indoorTemperature)
+                put("unit", "°C") // 室温の単位
+            })
+            put("fuel_level", JSONObject().apply {
+                put("value", fuel)
+                put("unit", "%") // 燃料レベルの単位
+            })
             put("timestamp", currentDateTime)
         }
 
