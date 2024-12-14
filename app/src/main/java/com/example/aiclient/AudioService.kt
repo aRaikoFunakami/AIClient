@@ -254,7 +254,8 @@ class AudioService : Service() {
     }
 
     private fun sendVehicleDataAsJson(indoorTemperature: Int, speed: Int, fuel: Int) {
-        val currentDateTime = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.getDefault()).format(Date())
+        // ISO 8601形式のタイムスタンプを生成
+        val currentDateTime = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.getDefault()).format(Date())
 
         val vehicleStatusJson = JSONObject().apply {
             put("description", "This is the current status of the vehicle, including indoor temperature, speed, fuel level, and timestamp.")
