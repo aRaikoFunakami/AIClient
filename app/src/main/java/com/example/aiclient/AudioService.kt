@@ -24,6 +24,8 @@ import org.json.JSONArray
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.pow
+import kotlin.math.sqrt
 
 
 class AudioService : Service() {
@@ -186,30 +188,58 @@ class AudioService : Service() {
             val sendBuffer = ByteArray(BLOCK_SIZE)
             val accumulated = mutableListOf<Byte>()
 
+            val SILENCE_THRESHOLD = 30.00f // 無音とみなすRMS値
+            val SILENCE_THRESHOLD_MILLIS = 1000L // 無音判定の持続時間（1秒）
+            var silenceDuration = 0L // 無音時間を記録する変数ç
+            var startTime = System.currentTimeMillis()
+
             sendVehicleDataAsJson(temp, speed, fuel)
+
             while (isActive && audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
                 val read = audioRecord!!.read(sendBuffer, 0, BLOCK_SIZE)
                 if (read > 0) {
-                    if (isPlayingAudio) {
-                        accumulated.clear()
-                        //Log.d(TAG, "accumulated.clear()")
+                    val rms = calculateRMS(sendBuffer, read)
+                    val currentTime = System.currentTimeMillis()
+
+                    //Log.e(TAG, "rms: $rms, silenceDuration: $silenceDuration")
+                    if (rms < SILENCE_THRESHOLD) {
+                        // 無音と判定された場合、無音時間を加算
+                        silenceDuration += (currentTime - startTime)
                     } else {
-                        // 音声データを蓄積
+                        // 無音でない場合はカウントをリセット
+                        silenceDuration = 0
+                    }
+
+                    if (isPlayingAudio || isSilent(silenceDuration, SILENCE_THRESHOLD_MILLIS)) {
+                        // 無音状態が1秒以上続いた場合に蓄積をクリア
+                        accumulated.clear()
+                        //Log.e(TAG, "accumulated.clear")
+                    } else {
                         accumulated.addAll(sendBuffer.slice(0 until read))
                         if (accumulated.size >= BLOCK_SIZE) {
                             val toSend = accumulated.take(BLOCK_SIZE).toByteArray()
                             repeat(BLOCK_SIZE) { accumulated.removeAt(0) }
                             sendAudio(toSend) // 通常の音声データを送信
-                            //Log.d(TAG, "Sent sound data")
-                        }else{
-                            //Log.d(TAG, "accumulating sound data")
+                            //Log.e(TAG, "sendAudio")
                         }
                     }
+                    startTime = currentTime // 時間を更新
                 }
             }
-
         }
     }
+    private fun isSilent(silenceDuration: Long, durationThreshold: Long): Boolean {
+        return silenceDuration >= durationThreshold
+    }
+    // RMSを計算する関数
+    private  fun calculateRMS(buffer: ByteArray, length: Int): Float {
+        var sum = 0.0
+        for (i in 0 until length) {
+            sum += buffer[i].toDouble().pow(2.0)
+        }
+        return sqrt(sum / length).toFloat()
+    }
+
     /**
      * 音声データをBase64エンコードして送信
      */
