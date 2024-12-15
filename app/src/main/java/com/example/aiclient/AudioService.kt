@@ -88,18 +88,17 @@ class AudioService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         intent?.let {
+            // 必要なエクストラを取得
+            temp = it.getIntExtra("temp", 20)
+            speed = it.getIntExtra("speed", 60)
+            fuel = it.getIntExtra("fuel", 50)
+            latitude = it.getDoubleExtra("latitude", 35.6997837)
+            longitude = it.getDoubleExtra("longitude", 139.7741138)
+            address = it.getStringExtra("address") ?: "Unknown"
+            timestamp = it.getStringExtra("timestamp") ?: ""
+            websocketUrl = it.getStringExtra(EXTRA_WEBSOCKET_URL) ?: websocketUrl
             when (it.action) {
                 ACTION_START_PROCESSING -> {
-                    // 必要なエクストラを取得
-                    temp = it.getIntExtra("temp", 20)
-                    speed = it.getIntExtra("speed", 60)
-                    fuel = it.getIntExtra("fuel", 50)
-                    latitude = it.getDoubleExtra("latitude", 35.6997837)
-                    longitude = it.getDoubleExtra("longitude", 139.7741138)
-                    address = it.getStringExtra("address") ?: "Unknown"
-                    timestamp = it.getStringExtra("timestamp") ?: ""
-                    websocketUrl = it.getStringExtra(EXTRA_WEBSOCKET_URL) ?: websocketUrl
-
                     // WebSocket URL のバリデーションを再確認
                     if (websocketUrl.isEmpty() || (!websocketUrl.startsWith("ws://") && !websocketUrl.startsWith("wss://"))) {
                         Log.e(TAG, "無効なWebSocket URL: $websocketUrl")
