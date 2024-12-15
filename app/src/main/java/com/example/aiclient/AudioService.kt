@@ -6,6 +6,7 @@ import android.app.Service
 import android.content.*
 import android.content.pm.PackageManager
 import android.media.*
+import android.os.Build
 import android.os.IBinder
 import android.util.Base64
 import android.util.Log
@@ -64,14 +65,14 @@ class AudioService : Service() {
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "onCreate")
-        registerReceiver(temperatureReceiver, IntentFilter(ACTION_UPDATE_TEMPERATURE), Context.RECEIVER_NOT_EXPORTED)
-        /*
+
+        requestPermissionsIfNeeded()
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(temperatureReceiver, IntentFilter(ACTION_UPDATE_TEMPERATURE), Context.RECEIVER_NOT_EXPORTED)
         } else {
             registerReceiver(temperatureReceiver, IntentFilter(ACTION_UPDATE_TEMPERATURE))
         }
-         */
         startForegroundService()
     }
 
@@ -173,7 +174,11 @@ class AudioService : Service() {
             AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT
         )
-
+        if (bufferSize <= 0) {
+            Log.e(TAG, "Invalid buffer size: $bufferSize")
+            stopSelf()
+            return
+        }
         audioRecord = AudioRecord(
             MediaRecorder.AudioSource.MIC,
             SAMPLE_RATE,
@@ -528,5 +533,24 @@ class AudioService : Service() {
         webSocket = null
         // 再接続
         startAudioProcessing()
+    }
+
+    private fun requestPermissionsIfNeeded() {
+        val requiredPermissions = arrayOf(
+            Manifest.permission.RECORD_AUDIO,
+            Manifest.permission.FOREGROUND_SERVICE_MICROPHONE
+        )
+
+        if (requiredPermissions.any {
+                ActivityCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+            }) {
+            // 権限が付与されていない場合は、ユーザーにリクエストを送る必要があります。
+            val intent = Intent(this, MainActivity::class.java).apply {
+                putExtra("request_permissions", requiredPermissions)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+            stopSelf()
+        }
     }
 }
