@@ -6,6 +6,33 @@
     android:orientation="vertical"
     android:padding="16dp">
 
+    <!-- WebSocket URL 設定セクション -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:padding="8dp">
+
+        <EditText
+            android:id="@+id/websocketUrlEditText"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:hint="WebSocket URL"
+            android:text="ws://192.168.1.100:3000/ws"
+            android:inputType="textUri"
+            android:padding="8dp"
+            android:background="@android:drawable/edit_text" />
+
+        <Button
+            android:id="@+id/updateWebsocketUrlButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="更新"
+            android:layout_marginStart="8dp" />
+    </LinearLayout>
+
     <!-- Start/Stop Button -->
     <Button
         android:id="@+id/startStopButton"

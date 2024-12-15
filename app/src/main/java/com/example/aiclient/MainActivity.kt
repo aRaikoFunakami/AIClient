@@ -45,6 +45,7 @@ class MainActivity : AppCompatActivity() {
     private var currentLongitude = ACCESS_LON
     private var currentAddress: String = "Unknown"
     private var currentTimestamp: String = ""
+    private var websocketUrl:String =  "ws://192.168.1.100:3000/ws"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -59,11 +60,16 @@ class MainActivity : AppCompatActivity() {
         val gpsOption = findViewById<RadioButton>(R.id.gpsRadioButton)
         val accessOption = findViewById<RadioButton>(R.id.accessRadioButton)
         val vegasOption = findViewById<RadioButton>(R.id.vegasRadioButton)
+        val websocketUrlEditText = findViewById<EditText>(R.id.websocketUrlEditText)
+        val updateWebsocketUrlButton = findViewById<Button>(R.id.updateWebsocketUrlButton)
 
         // テスト用にGoogle Play Services利用可能性チェック
         val googleAPI = GoogleApiAvailability.getInstance()
         val resultCode = googleAPI.isGooglePlayServicesAvailable(this)
         isGPSAvailable = (resultCode == ConnectionResult.SUCCESS)
+
+        // websocket
+        websocketUrl = websocketUrlEditText.text.toString().trim()
 
         // Picker設定
         tempPicker.minValue = 18
@@ -106,6 +112,13 @@ class MainActivity : AppCompatActivity() {
                         accessOption.isChecked = true
                     }
                 }
+            }
+        }
+
+        updateWebsocketUrlButton.setOnClickListener {
+            websocketUrl = websocketUrlEditText.text.toString().trim()
+            if (websocketUrl.isNotEmpty()) {
+                updateWebSocketUrl(websocketUrl)
             }
         }
 
@@ -156,11 +169,15 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         val intentFilter = IntentFilter(ACTION_UPDATE_TEMPERATURE)
+        registerReceiver(temperatureReceiver, intentFilter, Context.RECEIVER_NOT_EXPORTED)
+        /*
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(temperatureReceiver, intentFilter, Context.RECEIVER_NOT_EXPORTED)
         } else {
             registerReceiver(temperatureReceiver, intentFilter)
         }
+
+         */
     }
 
     private val temperatureReceiver = object : BroadcastReceiver() {
@@ -174,6 +191,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun startMyService() {
         val intent = Intent(this, AudioService::class.java).apply {
+            action = AudioService.ACTION_START_PROCESSING // アクションを設定
             putExtra("temp", findViewById<NumberPicker>(R.id.tempPicker).value)
             putExtra("speed", findViewById<NumberPicker>(R.id.speedPicker).value)
             putExtra("fuel", findViewById<NumberPicker>(R.id.fuelPicker).value)
@@ -181,6 +199,7 @@ class MainActivity : AppCompatActivity() {
             putExtra("longitude", currentLongitude)
             putExtra("address", currentAddress)
             putExtra("timestamp", currentTimestamp)
+            putExtra(AudioService.EXTRA_WEBSOCKET_URL, websocketUrl)
         }
         ContextCompat.startForegroundService(this, intent)
         isServiceRunning = true
@@ -203,6 +222,7 @@ class MainActivity : AppCompatActivity() {
             putExtra("longitude", currentLongitude)
             putExtra("address", currentAddress)
             putExtra("timestamp", currentTimestamp)
+            putExtra(AudioService.EXTRA_WEBSOCKET_URL, websocketUrl)
         }
         ContextCompat.startForegroundService(this, intent)
     }
@@ -282,5 +302,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun getTimeZoneIdFromLocation(latitude: Double, longitude: Double): String {
         return TimeZone.getDefault().id
+    }
+
+    private fun updateWebSocketUrl(newUrl: String) {
+        val intent = Intent(this, AudioService::class.java).apply {
+            action = AudioService.ACTION_UPDATE_URL
+            putExtra(AudioService.EXTRA_WEBSOCKET_URL, newUrl)
+        }
+        startService(intent)
     }
 }

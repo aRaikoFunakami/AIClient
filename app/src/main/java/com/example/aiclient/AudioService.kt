@@ -24,15 +24,18 @@ import kotlin.math.pow
 import kotlin.math.sqrt
 
 class AudioService : Service() {
-
     companion object {
-        private const val TAG = "AudioService"
-        private const val SAMPLE_RATE = 24000
-        private const val BLOCK_SIZE = 4800
-        private const val WS_URL = "ws://192.168.1.100:3000/ws"
-        private const val SILENCE_THRESHOLD_MS = 2000L
-        private const val ACTION_UPDATE_TEMPERATURE = "com.example.aiclient.UPDATE_TEMPERATURE"
-        private const val EXTRA_TEMPERATURE = "extra_temperature"
+        const val TAG = "AudioService"
+        const val SAMPLE_RATE = 24000
+        const val BLOCK_SIZE = 4800
+        var WS_URL = ""//""ws://192.168.1.100:3000/ws" // デフォルトURLを変数に変更
+        const val SILENCE_THRESHOLD_MS = 2000L
+
+        const val ACTION_START_PROCESSING = "com.example.aiclient.action.START_PROCESSING"
+        const val ACTION_UPDATE_TEMPERATURE = "com.example.aiclient.UPDATE_TEMPERATURE"
+        const val EXTRA_TEMPERATURE = "extra_temperature"
+        const val ACTION_UPDATE_URL = "com.example.aiclient.action.UPDATE_URL"
+        const val EXTRA_WEBSOCKET_URL = "com.example.aiclient.extra.WEBSOCKET_URL"
     }
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -62,11 +65,14 @@ class AudioService : Service() {
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "onCreate")
+        registerReceiver(temperatureReceiver, IntentFilter(ACTION_UPDATE_TEMPERATURE), Context.RECEIVER_NOT_EXPORTED)
+        /*
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(temperatureReceiver, IntentFilter(ACTION_UPDATE_TEMPERATURE), Context.RECEIVER_NOT_EXPORTED)
         } else {
             registerReceiver(temperatureReceiver, IntentFilter(ACTION_UPDATE_TEMPERATURE))
         }
+         */
         startForegroundService()
     }
 
@@ -83,17 +89,51 @@ class AudioService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         intent?.let {
-            temp = it.getIntExtra("temp", 20)
-            speed = it.getIntExtra("speed", 60)
-            fuel = it.getIntExtra("fuel", 50)
-            latitude = it.getDoubleExtra("latitude", 35.6997837)
-            longitude = it.getDoubleExtra("longitude", 139.7741138)
-            address = it.getStringExtra("address") ?: "Unknown"
-            timestamp = it.getStringExtra("timestamp") ?: ""
-        }
-        if (!isRunning) {
-            isRunning = true
-            startAudioProcessing()
+            when (it.action) {
+                ACTION_START_PROCESSING -> {
+                    // 必要なエクストラを取得
+                    temp = it.getIntExtra("temp", 20)
+                    speed = it.getIntExtra("speed", 60)
+                    fuel = it.getIntExtra("fuel", 50)
+                    latitude = it.getDoubleExtra("latitude", 35.6997837)
+                    longitude = it.getDoubleExtra("longitude", 139.7741138)
+                    address = it.getStringExtra("address") ?: "Unknown"
+                    timestamp = it.getStringExtra("timestamp") ?: ""
+                    WS_URL = it.getStringExtra(EXTRA_WEBSOCKET_URL) ?: WS_URL
+
+                    // WebSocket URL のバリデーションを再確認
+                    if (WS_URL.isEmpty() || (!WS_URL.startsWith("ws://") && !WS_URL.startsWith("wss://"))) {
+                        Log.e(TAG, "無効なWebSocket URL: $WS_URL")
+                        stopSelf()
+                        return START_NOT_STICKY
+                    }
+
+                    if (!isRunning) {
+                        isRunning = true
+                        startAudioProcessing()
+                    } else {
+                        Log.e(TAG, "isRunning: ${isRunning}")
+                    }
+
+                }
+
+                ACTION_UPDATE_URL -> {
+                    // WebSocket URL の更新処理
+                    val newUrl = it.getStringExtra(EXTRA_WEBSOCKET_URL)
+                    if (!newUrl.isNullOrEmpty()) {
+                        WS_URL = newUrl
+                        // 必要に応じて WebSocket 接続を再構築
+                        restartWebSocket()
+                    }
+                    else {
+                        Log.e(TAG, "WS_URL: ${WS_URL}")
+                    }
+                }
+
+                else -> {
+                    Log.w(TAG, "Unhandled action: ${it.action}")
+                }
+            }
         }
         return START_STICKY
     }
@@ -165,6 +205,7 @@ class AudioService : Service() {
         )
         audioTrack?.play()
 
+        Log.e(TAG, "WebSocket connect to : ${WS_URL}")
         val client = OkHttpClient()
         val request = Request.Builder().url(WS_URL).build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
@@ -479,7 +520,15 @@ class AudioService : Service() {
         val intent = Intent().apply {
             action = ACTION_UPDATE_TEMPERATURE
             putExtra(EXTRA_TEMPERATURE, temp)
+            setPackage(packageName) // アプリ内に限定
         }
         sendBroadcast(intent)
+    }
+
+    private fun restartWebSocket() {
+        webSocket?.close(1000, "URL updated")
+        webSocket = null
+        // 再接続
+        startAudioProcessing()
     }
 }
