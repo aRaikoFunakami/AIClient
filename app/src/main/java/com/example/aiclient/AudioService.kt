@@ -66,13 +66,18 @@ class AudioService : Service() {
         super.onCreate()
         Log.d(TAG, "onCreate")
 
-        requestPermissionsIfNeeded()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            requestPermissionsIfNeeded()
+        }
+
+        registerReceiver(temperatureReceiver, IntentFilter(ACTION_UPDATE_TEMPERATURE), Context.RECEIVER_NOT_EXPORTED)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(temperatureReceiver, IntentFilter(ACTION_UPDATE_TEMPERATURE), Context.RECEIVER_NOT_EXPORTED)
         } else {
             registerReceiver(temperatureReceiver, IntentFilter(ACTION_UPDATE_TEMPERATURE))
         }
+
         startForegroundService()
     }
 
@@ -538,7 +543,9 @@ class AudioService : Service() {
     private fun requestPermissionsIfNeeded() {
         val requiredPermissions = arrayOf(
             Manifest.permission.RECORD_AUDIO,
-            Manifest.permission.FOREGROUND_SERVICE_MICROPHONE
+            Manifest.permission.FOREGROUND_SERVICE,
+            Manifest.permission.FOREGROUND_SERVICE_MICROPHONE,
+            Manifest.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK,
         )
 
         if (requiredPermissions.any {

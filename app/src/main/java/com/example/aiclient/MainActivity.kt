@@ -170,6 +170,7 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         val intentFilter = IntentFilter(ACTION_UPDATE_TEMPERATURE)
 
+        registerReceiver(temperatureReceiver, intentFilter, Context.RECEIVER_NOT_EXPORTED)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(temperatureReceiver, intentFilter, Context.RECEIVER_NOT_EXPORTED)
         } else {
