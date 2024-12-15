@@ -18,6 +18,7 @@ import android.widget.NumberPicker
 class MainActivity : AppCompatActivity() {
     private val ACTION_UPDATE_TEMPERATURE = "com.example.aiclient.UPDATE_TEMPERATURE"
     private val REQUEST_CODE_RECORD_AUDIO = 1001
+    private val REQUEST_LOCATION_PERMISSION = 1002
     private var isServiceRunning = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -45,7 +46,8 @@ class MainActivity : AppCompatActivity() {
         fuelPicker.wrapSelectorWheel = true
         fuelPicker.value = 50 // 初期値
 
-
+        // Permission Check
+        // Manifest.permission.RECORD_AUDIO
         startStopButton.setOnClickListener {
             if (!isServiceRunning) {
                 if (ContextCompat.checkSelfPermission(
@@ -64,6 +66,14 @@ class MainActivity : AppCompatActivity() {
             } else {
                 stopMyService()
             }
+        }
+        // Manifest.permission.ACCESS_FINE_LOCATION
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION),
+                REQUEST_LOCATION_PERMISSION
+            )
         }
 
         // NumberPickerの変更をAudioServiceに通知

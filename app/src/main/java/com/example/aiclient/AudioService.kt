@@ -1,6 +1,7 @@
 package com.example.aiclient
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.Service
 import android.content.ActivityNotFoundException
@@ -9,24 +10,43 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
-import android.media.*
+import android.location.Geocoder
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioManager
+import android.media.AudioRecord
+import android.media.AudioTrack
+import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Build
 import android.os.IBinder
 import android.util.Base64
 import android.util.Log
 import androidx.core.app.ActivityCompat
-import kotlinx.coroutines.*
-import okhttp3.*
-import org.json.JSONObject
-import java.util.concurrent.atomic.AtomicLong
+import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.LocationServices
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
 import org.json.JSONArray
+import org.json.JSONObject
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.pow
 import kotlin.math.sqrt
-
 
 class AudioService : Service() {
 
@@ -56,6 +76,7 @@ class AudioService : Service() {
     private var temp: Int = 20
     private var speed: Int = 0
     private var fuel: Int = 100
+    private lateinit var fusedLocationClient: FusedLocationProviderClient
 
     @Volatile
     private var isPlayingAudio = false
@@ -69,6 +90,10 @@ class AudioService : Service() {
     override fun onCreate() {
         super.onCreate()
         Log.d(TAG, "onCreate")
+        // GPS
+        fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
+
+        @SuppressLint("MissingPermission", "UnsafeProtectedBroadcastReceiver")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             // Android 13以降
             registerReceiver(temperatureReceiver, IntentFilter(ACTION_UPDATE_TEMPERATURE), Context.RECEIVER_NOT_EXPORTED)
@@ -304,45 +329,71 @@ class AudioService : Service() {
     }
 
     private fun sendVehicleDataAsJson(indoorTemperature: Int, speed: Int, fuel: Int) {
-        // ISO 8601形式のタイムスタンプを生成
-        val currentDateTime = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.getDefault()).format(Date())
+        getCurrentLocation { latitude, longitude ->
+            // 緯度・経度から住所を取得
+            val address = getAddressFromLatLong(this, latitude, longitude)
 
-        val vehicleStatusJson = JSONObject().apply {
-            put("description", "This is the current status of the vehicle, including indoor temperature, speed, fuel level, and timestamp.")
-            put("speed", JSONObject().apply {
-                put("value", speed)
-                put("unit", "km/h") // 速度の単位
-            })
-            put("indoor_temperature", JSONObject().apply {
-                put("value", indoorTemperature)
-                put("unit", "°C") // 室温の単位
-            })
-            put("fuel_level", JSONObject().apply {
-                put("value", fuel)
-                put("unit", "%") // 燃料レベルの単位
-            })
-            put("timestamp", currentDateTime)
-        }
+            // 緯度経度からタイムゾーンIDを取得し、それを TimeZone オブジェクトに変換
+            val timeZoneId = getTimeZoneIdFromLocation(this, latitude, longitude)
+            val timeZone = TimeZone.getTimeZone(timeZoneId) // String を TimeZone に変換
 
-        val messageJson = JSONObject().apply {
-            put("event_id", "event_${System.currentTimeMillis()}")
-            put("type", "conversation.item.create")
-            put("previous_item_id", JSONObject.NULL)
-            put("item", JSONObject().apply {
-                put("id", "msg_${System.currentTimeMillis()}")
-                put("type", "message")
-                put("role", "user")
-                put("content", JSONArray().apply {
-                    put(JSONObject().apply {
-                        put("type", "input_text")
-                        put("text", vehicleStatusJson.toString()) // JSONを文字列として挿入
+            // タイムゾーンを設定して ISO 8601形式のタイムスタンプを生成
+            val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", Locale.getDefault()).apply {
+                this.timeZone = timeZone // TimeZone オブジェクトを設定
+            }
+            val currentDateTime = sdf.format(Date())
+
+            // 車両ステータスのJSONを作成
+            val vehicleStatusJson = JSONObject().apply {
+                put(
+                    "description",
+                    """This JSON represents the current vehicle status, 
+                        including details such as speed, indoor temperature, 
+                        fuel level, geographic location, and a timestamp.
+                        """
+                )
+                put("speed", JSONObject().apply {
+                    put("value", speed)
+                    put("unit", "km/h") // 速度の単位
+                })
+                put("indoor_temperature", JSONObject().apply {
+                    put("value", indoorTemperature)
+                    put("unit", "°C") // 室温の単位
+                })
+                put("fuel_level", JSONObject().apply {
+                    put("value", fuel)
+                    put("unit", "%") // 燃料レベルの単位
+                })
+                put("location", JSONObject().apply {
+                    put("latitude", latitude)
+                    put("longitude", longitude)
+                })
+                put("address", address ?: "Unknown") // 住所を追加（取得できなかった場合は "Unknown" を設定）
+                put("timestamp", currentDateTime)
+            }
+
+            // WebSocket送信用のメッセージJSONを作成
+            val messageJson = JSONObject().apply {
+                put("event_id", "event_${System.currentTimeMillis()}")
+                put("type", "conversation.item.create")
+                put("previous_item_id", JSONObject.NULL)
+                put("item", JSONObject().apply {
+                    put("id", "msg_${System.currentTimeMillis()}")
+                    put("type", "message")
+                    put("role", "user")
+                    put("content", JSONArray().apply {
+                        put(JSONObject().apply {
+                            put("type", "input_text")
+                            put("text", vehicleStatusJson.toString()) // JSONを文字列として挿入
+                        })
                     })
                 })
-            })
-        }
+            }
 
-        webSocket?.send(messageJson.toString())
-        Log.d(TAG, "Sent vehicle data as JSON string with description: $messageJson")
+            // WebSocket送信
+            webSocket?.send(messageJson.toString())
+            Log.d(TAG, "Sent vehicle data with timezone: ${timeZone.id}")
+        }
     }
 
     private fun handleIncomingMessage(text: String) {
@@ -560,5 +611,58 @@ class AudioService : Service() {
             putExtra(EXTRA_TEMPERATURE, temp)
         }
         sendBroadcast(intent)
+    }
+
+    private fun getCurrentLocation(onLocationReceived: (latitude: Double, longitude: Double) -> Unit) {
+        if (ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            Log.e(TAG, "Location permission not granted.")
+            return
+        }
+
+        fusedLocationClient.lastLocation.addOnSuccessListener { location ->
+            if (location != null) {
+                onLocationReceived(location.latitude, location.longitude)
+            } else {
+                Log.e(TAG, "Failed to get location.")
+                onLocationReceived(Double.NaN, Double.NaN)
+            }
+        }
+    }
+
+    fun getTimeZoneIdFromLocation(context: Context, latitude: Double, longitude: Double): String {
+        val geocoder = Geocoder(context, Locale.getDefault())
+        return try {
+            // Geocoderで住所情報を取得
+            val addresses = geocoder.getFromLocation(latitude, longitude, 1)
+            if (addresses != null && addresses.isNotEmpty()) {
+                // タイムゾーンIDを取得
+                TimeZone.getDefault().id // デフォルト（バックアップ用）
+            } else {
+                Log.e("TimeZoneError", "No address found for location.")
+                "UTC" // デフォルト値として UTC
+            }
+        } catch (e: Exception) {
+            Log.e("TimeZoneError", "Error fetching timezone: ${e.localizedMessage}")
+            "UTC" // エラー時のデフォルト
+        }
+    }
+
+    fun getAddressFromLatLong(context: Context, latitude: Double, longitude: Double): String? {
+        val geocoder = Geocoder(context, Locale.getDefault())
+        return try {
+            val addresses = geocoder.getFromLocation(latitude, longitude, 1)
+            if (addresses != null && addresses.isNotEmpty()) {
+                addresses[0].getAddressLine(0) // フォーマットされた住所を取得
+            } else {
+                null // 住所が見つからない場合
+            }
+        } catch (e: Exception) {
+            Log.e("GeocoderError", "Error fetching address: ${e.localizedMessage}")
+            null
+        }
     }
 }
