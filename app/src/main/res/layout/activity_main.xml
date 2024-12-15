@@ -1,8 +1,8 @@
 <LinearLayout
     xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/mainLayoutRoot"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:gravity="center"
     android:orientation="vertical"
     android:padding="16dp">
 
@@ -11,20 +11,20 @@
         android:id="@+id/startStopButton"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Start Service" />
+        android:text="Start Service"
+        android:layout_gravity="center_horizontal" />
 
-    <!-- Space between Button and Pickers -->
+    <!-- Spacer -->
     <View
         android:layout_width="match_parent"
         android:layout_height="16dp" />
 
-    <!-- Horizontal layout for all Pickers -->
+    <!-- Temperature, Speed, Fuel Pickers -->
     <LinearLayout
-        android:layout_width="wrap_content"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:gravity="center"
-        android:layout_marginTop="16dp">
+        android:gravity="center_horizontal">
 
         <!-- Temperature Picker -->
         <LinearLayout
@@ -40,8 +40,11 @@
                 android:layout_height="wrap_content"
                 android:text="温度 (Temperature)"
                 android:textSize="18sp"
-                android:layout_marginBottom="16dp" />
-
+                android:layout_marginBottom="8dp" />
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="20dp"
+                android:layout_weight="0" />
             <NumberPicker
                 android:id="@+id/tempPicker"
                 android:layout_width="wrap_content"
@@ -64,7 +67,11 @@
                 android:layout_height="wrap_content"
                 android:text="車両速度 (Speed)"
                 android:textSize="18sp"
-                android:layout_marginBottom="16dp" />
+                android:layout_marginBottom="8dp" />
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="20dp"
+                android:layout_weight="0" />
 
             <NumberPicker
                 android:id="@+id/speedPicker"
@@ -88,8 +95,11 @@
                 android:layout_height="wrap_content"
                 android:text="燃料レベル (Fuel Level)"
                 android:textSize="18sp"
-                android:layout_marginBottom="16dp" />
-
+                android:layout_marginBottom="8dp" />
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="20dp"
+                android:layout_weight="0" />
             <NumberPicker
                 android:id="@+id/fuelPicker"
                 android:layout_width="wrap_content"
@@ -98,4 +108,76 @@
                 android:scaleY="1.5" />
         </LinearLayout>
     </LinearLayout>
+
+    <!-- Spacer with Weight to Push Central Content to Center -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="0.1" />
+
+    <!-- 中央に配置するRadioGroupと住所表示 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:padding="8dp">
+
+        <!-- 現在地選択用のRadioGroup -->
+        <RadioGroup
+            android:id="@+id/locationRadioGroup"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <RadioButton
+                android:id="@+id/accessRadioButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="ACCESS HQ" />
+
+            <RadioButton
+                android:id="@+id/vegasRadioButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Las Vegas Convention Center" />
+
+            <RadioButton
+                android:id="@+id/gpsRadioButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="GPS" />
+        </RadioGroup>
+
+        <!-- Spacer -->
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="16dp" />
+
+        <!-- 住所表示 -->
+        <TextView
+            android:id="@+id/addressLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="住所 (Address)"
+            android:textSize="18sp"
+            android:layout_marginBottom="8dp" />
+
+        <TextView
+            android:id="@+id/addressTextView"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="住所がここに表示されます"
+            android:textSize="16sp"
+            android:padding="8dp"
+            android:background="@android:color/darker_gray"
+            android:textColor="@android:color/white" />
+    </LinearLayout>
+
+    <!-- Spacer with Weight to Push Central Content to Center -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
 </LinearLayout>
