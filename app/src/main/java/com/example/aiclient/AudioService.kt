@@ -6,7 +6,6 @@ import android.app.Service
 import android.content.*
 import android.content.pm.PackageManager
 import android.media.*
-import android.os.Build
 import android.os.IBinder
 import android.util.Base64
 import android.util.Log
@@ -28,7 +27,7 @@ class AudioService : Service() {
         const val TAG = "AudioService"
         const val SAMPLE_RATE = 24000
         const val BLOCK_SIZE = 4800
-        var WS_URL = ""//""ws://192.168.1.100:3000/ws" // デフォルトURLを変数に変更
+        var websocketUrl = ""//""ws://192.168.1.100:3000/ws" // デフォルトURLを変数に変更
         const val SILENCE_THRESHOLD_MS = 2000L
 
         const val ACTION_START_PROCESSING = "com.example.aiclient.action.START_PROCESSING"
@@ -99,11 +98,11 @@ class AudioService : Service() {
                     longitude = it.getDoubleExtra("longitude", 139.7741138)
                     address = it.getStringExtra("address") ?: "Unknown"
                     timestamp = it.getStringExtra("timestamp") ?: ""
-                    WS_URL = it.getStringExtra(EXTRA_WEBSOCKET_URL) ?: WS_URL
+                    websocketUrl = it.getStringExtra(EXTRA_WEBSOCKET_URL) ?: websocketUrl
 
                     // WebSocket URL のバリデーションを再確認
-                    if (WS_URL.isEmpty() || (!WS_URL.startsWith("ws://") && !WS_URL.startsWith("wss://"))) {
-                        Log.e(TAG, "無効なWebSocket URL: $WS_URL")
+                    if (websocketUrl.isEmpty() || (!websocketUrl.startsWith("ws://") && !websocketUrl.startsWith("wss://"))) {
+                        Log.e(TAG, "無効なWebSocket URL: $websocketUrl")
                         stopSelf()
                         return START_NOT_STICKY
                     }
@@ -121,12 +120,12 @@ class AudioService : Service() {
                     // WebSocket URL の更新処理
                     val newUrl = it.getStringExtra(EXTRA_WEBSOCKET_URL)
                     if (!newUrl.isNullOrEmpty()) {
-                        WS_URL = newUrl
+                        websocketUrl = newUrl
                         // 必要に応じて WebSocket 接続を再構築
                         restartWebSocket()
                     }
                     else {
-                        Log.e(TAG, "WS_URL: ${WS_URL}")
+                        Log.e(TAG, "WS_URL: ${websocketUrl}")
                     }
                 }
 
@@ -205,9 +204,9 @@ class AudioService : Service() {
         )
         audioTrack?.play()
 
-        Log.e(TAG, "WebSocket connect to : ${WS_URL}")
+        Log.e(TAG, "WebSocket connect to : ${websocketUrl}")
         val client = OkHttpClient()
-        val request = Request.Builder().url(WS_URL).build()
+        val request = Request.Builder().url(websocketUrl).build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onMessage(webSocket: WebSocket, text: String) {
                 handleIncomingMessage(text)
