@@ -74,8 +74,6 @@ class AudioService : Service() {
             requestPermissionsIfNeeded()
         }
 
-        registerReceiver(temperatureReceiver, IntentFilter(ACTION_UPDATE_TEMPERATURE), Context.RECEIVER_NOT_EXPORTED)
-
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(temperatureReceiver, IntentFilter(ACTION_UPDATE_TEMPERATURE), Context.RECEIVER_NOT_EXPORTED)
         } else {
@@ -488,7 +486,7 @@ class AudioService : Service() {
             return
         }
 
-        val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(googleMapsUrl)).apply {
+        val intent = Intent(Intent.ACTION_VIEW, googleMapsUrl.toUri()).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             setPackage("org.chromium.chrome.stable")
         }
@@ -521,7 +519,7 @@ class AudioService : Service() {
     private fun searchVideosOnYoutube(query: String) {
         val youtubeSearchUrl = "https://www.youtube.com/results?search_query=" + android.net.Uri.encode(query)
         val intent = Intent(Intent.ACTION_VIEW).apply {
-            data = android.net.Uri.parse(youtubeSearchUrl)
+            data = youtubeSearchUrl.toUri()
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         try {
