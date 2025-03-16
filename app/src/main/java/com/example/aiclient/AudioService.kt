@@ -6,6 +6,7 @@ import android.app.Service
 import android.content.*
 import android.content.pm.PackageManager
 import android.media.*
+import android.net.Uri
 import android.os.Build
 import android.os.IBinder
 import android.util.Base64
@@ -22,6 +23,7 @@ import org.json.JSONObject
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.pow
 import kotlin.math.sqrt
+import androidx.core.net.toUri
 
 class AudioService : Service() {
     companion object {
@@ -29,7 +31,9 @@ class AudioService : Service() {
         const val SAMPLE_RATE = 24000
         const val BLOCK_SIZE = 4800
         var websocketUrl = ""//""ws://192.168.1.100:3000/ws" // デフォルトURLを変数に変更
+        var qrCodeUrl = ""    // QRコードページのURL
         const val SILENCE_THRESHOLD_MS = 2000L
+        const val SILENCE_THRESHOLD = 50.0f
 
         const val ACTION_START_PROCESSING = "com.example.aiclient.action.START_PROCESSING"
         const val ACTION_UPDATE_TEMPERATURE = "com.example.aiclient.UPDATE_TEMPERATURE"
@@ -91,6 +95,13 @@ class AudioService : Service() {
             }
         }
     }
+    private fun getServerUrl(webSocketUrl: String): String {
+        return if (webSocketUrl.startsWith("ws://") || webSocketUrl.startsWith("wss://")) {
+            webSocketUrl.replace("ws://", "http://").replace("wss://", "https://").substringBeforeLast("/ws")
+        } else {
+            ""
+        }
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         intent?.let {
@@ -103,6 +114,7 @@ class AudioService : Service() {
             address = it.getStringExtra("address") ?: "Unknown"
             timestamp = it.getStringExtra("timestamp") ?: ""
             websocketUrl = it.getStringExtra(EXTRA_WEBSOCKET_URL) ?: websocketUrl
+            qrCodeUrl = getServerUrl(websocketUrl) + "/generate_qr" // `generate_qr` のURLを設定
             when (it.action) {
                 ACTION_START_PROCESSING -> {
                     // WebSocket URL のバリデーションを再確認
@@ -227,6 +239,9 @@ class AudioService : Service() {
         })
 
         audioRecord?.startRecording()
+        // サーバーから音声がくるまで受け付けない
+        isPlayingAudio = true
+
         sendJob = serviceScope.launch {
             val sendBuffer = ByteArray(BLOCK_SIZE)
             val accumulated = mutableListOf<Byte>()
@@ -269,12 +284,13 @@ class AudioService : Service() {
         rms: Float,
         silenceDuration: Long,
         currentTime: Long,
-        lastUpdateTime: Long
+        lastUpdateTime: Long,
     ): Long {
-        val SILENCE_THRESHOLD = 30.0f
         return if (rms < SILENCE_THRESHOLD) {
             silenceDuration + (currentTime - lastUpdateTime)
         } else {
+            // デバッグログ追加
+            Log.d(TAG, "RMS: $rms, SilenceThreshold: $SILENCE_THRESHOLD")
             0L
         }
     }
@@ -292,12 +308,35 @@ class AudioService : Service() {
     }
 
     private fun sendAudio(data: ByteArray) {
+        if (webSocket == null) {
+            Log.e(TAG, "WebSocket is null. Attempting to reconnect...")
+            restartWebSocket()
+            return
+        }
+
         val base64data = Base64.encodeToString(data, Base64.NO_WRAP)
+        if (base64data.isEmpty()) {
+            Log.e(TAG, "Base64 encoding failed. Data is empty.")
+            return
+        }
+
         val json = JSONObject().apply {
             put("type", "input_audio_buffer.append")
             put("audio", base64data)
         }
-        webSocket?.send(json.toString())
+
+        val jsonString = json.toString()
+
+        // 送信データの最初の100文字のみ表示
+        // Log.d(TAG, "Audio JSON: ${jsonString.take(100)}...")
+
+        val success = webSocket?.send(jsonString) ?: false
+        if (!success) {
+            Log.e(TAG, "Failed to send audio data. WebSocket might be disconnected.")
+            restartWebSocket()
+        } else {
+            Log.d(TAG, "Sent audio data successfully.")
+        }
     }
 
     private fun sendVehicleDataAsJson(
@@ -307,9 +346,10 @@ class AudioService : Service() {
         latitude: Double,
         longitude: Double,
         address: String,
-        timestamp: String
+        timestamp: String,
     ) {
         val vehicleStatusJson = JSONObject().apply {
+            put("type", "vehicle_status")
             put("description", "This JSON represents the current vehicle status.")
             put("speed", JSONObject().apply {
                 put("value", speed)
@@ -338,7 +378,7 @@ class AudioService : Service() {
             put("item", JSONObject().apply {
                 put("id", "msg_${System.currentTimeMillis()}")
                 put("type", "message")
-                put("role", "user")
+                put("role", "system")
                 put("content", JSONArray().apply {
                     put(JSONObject().apply {
                         put("type", "input_text")
@@ -347,17 +387,19 @@ class AudioService : Service() {
                 })
             })
         }
-
         webSocket?.send(messageJson.toString())
-        Log.d(TAG, "Sent vehicle data JSON.")
+
+        Log.d(TAG, "Sent vehicle data JSON: $vehicleStatusJson.toString()")
     }
 
     private fun handleIncomingMessage(text: String) {
+        Log.e(TAG, "handleIncomingMessage: $text")
         try {
             val json = JSONObject(text)
             val type = json.optString("type", "")
 
             when (type) {
+                "client_id" -> handleQrCodePage(json)
                 "response.audio.delta" -> handleAudioDelta(json)
                 "tools.aircontrol" -> handleAirControl(json)
                 "tools.aircontrol_delta" -> handleAirControlDelta(json)
@@ -367,6 +409,20 @@ class AudioService : Service() {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to parse message: $text", e)
+        }
+    }
+
+    private fun handleQrCodePage(json: JSONObject) {
+        try {
+            val clientId = json.getString("client_id")
+            val qrUrl = "$qrCodeUrl?client_id=$clientId" // `generate_qr` に `client_id` を追加
+            val intent = Intent(Intent.ACTION_VIEW, qrUrl.toUri()).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+            Log.d(TAG, "Opened QR Code Page: $qrUrl")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to open QR Code Page", e)
         }
     }
 
