@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Base64
 import android.util.Log
+import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.app.ActivityCompat
 import kotlinx.coroutines.*
 import okhttp3.OkHttpClient
@@ -24,6 +25,8 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.pow
 import kotlin.math.sqrt
 import androidx.core.net.toUri
+import android.graphics.Color
+
 
 class AudioService : Service() {
     companion object {
@@ -410,15 +413,24 @@ class AudioService : Service() {
         }
     }
 
+    private fun openCustomTab(url: String) {
+        // If the nested class is not resolved by an import, use full reference.
+        val customTabsIntent = CustomTabsIntent.Builder().build()
+
+        // Add FLAG_ACTIVITY_NEW_TASK to ensure the activity can be launched from a Service
+        customTabsIntent.intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+        // Use 'this' (the Service instance) as the Context
+        customTabsIntent.launchUrl(this, url.toUri())
+    }
     private fun handleQrCodePage(json: JSONObject) {
         try {
             val clientId = json.getString("client_id")
             val qrUrl = "$qrCodeUrl?client_id=$clientId" // `generate_qr` に `client_id` を追加
-            val intent = Intent(Intent.ACTION_VIEW, qrUrl.toUri()).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            startActivity(intent)
-            Log.d(TAG, "Opened QR Code Page: $qrUrl")
+
+            openCustomTab(qrUrl)
+
+            Log.d(TAG, "Opened QR Code Page in Custom Tab: $qrUrl")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to open QR Code Page", e)
         }
@@ -486,6 +498,8 @@ class AudioService : Service() {
             return
         }
 
+        openCustomTab(googleMapsUrl)
+        /*
         val intent = Intent(Intent.ACTION_VIEW, googleMapsUrl.toUri()).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             setPackage("org.chromium.chrome.stable")
@@ -499,6 +513,7 @@ class AudioService : Service() {
             intent.setPackage(null)
             startActivity(intent)
         }
+        */
     }
 
     private fun handleSearchVideos(json: JSONObject) {
@@ -518,6 +533,8 @@ class AudioService : Service() {
 
     private fun searchVideosOnYoutube(query: String) {
         val youtubeSearchUrl = "https://www.youtube.com/results?search_query=" + android.net.Uri.encode(query)
+        openCustomTab(youtubeSearchUrl)
+        /*
         val intent = Intent(Intent.ACTION_VIEW).apply {
             data = youtubeSearchUrl.toUri()
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -531,6 +548,7 @@ class AudioService : Service() {
             intent.setPackage(null)
             startActivity(intent)
         }
+         */
     }
 
     private fun restartSilenceCheckJob() {
