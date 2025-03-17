@@ -6,7 +6,6 @@ import android.app.Service
 import android.content.*
 import android.content.pm.PackageManager
 import android.media.*
-import android.net.Uri
 import android.os.Build
 import android.os.IBinder
 import android.util.Base64
@@ -25,7 +24,7 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.pow
 import kotlin.math.sqrt
 import androidx.core.net.toUri
-import android.graphics.Color
+import org.json.JSONException
 
 
 class AudioService : Service() {
@@ -371,35 +370,38 @@ class AudioService : Service() {
             put("address", address)
             put("timestamp", timestamp)
         }
-
-        val messageJson = JSONObject().apply {
-            put("event_id", "event_${System.currentTimeMillis()}")
-            put("type", "conversation.item.create")
-            put("previous_item_id", JSONObject.NULL)
-            put("item", JSONObject().apply {
-                put("id", "msg_${System.currentTimeMillis()}")
-                put("type", "message")
-                put("role", "system")
-                put("content", JSONArray().apply {
-                    put(JSONObject().apply {
-                        put("type", "input_text")
-                        put("text", vehicleStatusJson.toString())
-                    })
-                })
-            })
-        }
-        webSocket?.send(messageJson.toString())
-
+        webSocket?.send(vehicleStatusJson.toString())
         Log.d(TAG, "Sent vehicle data JSON: $vehicleStatusJson.toString()")
     }
 
+    /**
+     * Check if a given string is a valid JSON format
+     */
+    private fun isJson(text: String): Boolean {
+        return try {
+            JSONObject(text) // Try parsing as JSON object
+            true
+        } catch (ex: JSONException) {
+            try {
+                JSONArray(text) // If it fails, try parsing as JSON array
+                true
+            } catch (ex2: JSONException) {
+                false
+            }
+        }
+    }
+
     private fun handleIncomingMessage(text: String) {
-        Log.e(TAG, "handleIncomingMessage: $text")
+        Log.d(TAG, "handleIncomingMessage: $text")
+
+        // JSON 形式かどうかチェック
+        if (!isJson(text)) {
+            Log.e(TAG, "Ignore non-JSON message: $text")
+            return
+        }
         try {
             val json = JSONObject(text)
-            val type = json.optString("type", "")
-
-            when (type) {
+            when (val type = json.optString("type", "")) {
                 "client_id" -> handleQrCodePage(json)
                 "response.audio.delta" -> handleAudioDelta(json)
                 "tools.aircontrol" -> handleAirControl(json)
@@ -499,21 +501,6 @@ class AudioService : Service() {
         }
 
         openCustomTab(googleMapsUrl)
-        /*
-        val intent = Intent(Intent.ACTION_VIEW, googleMapsUrl.toUri()).apply {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            setPackage("org.chromium.chrome.stable")
-        }
-
-        try {
-            startActivity(intent)
-            Log.d(TAG, "Launching Google Maps with URL: $googleMapsUrl")
-        } catch (e: ActivityNotFoundException) {
-            Log.w(TAG, "Chromium not found. Launching default browser.")
-            intent.setPackage(null)
-            startActivity(intent)
-        }
-        */
     }
 
     private fun handleSearchVideos(json: JSONObject) {
@@ -534,21 +521,6 @@ class AudioService : Service() {
     private fun searchVideosOnYoutube(query: String) {
         val youtubeSearchUrl = "https://www.youtube.com/results?search_query=" + android.net.Uri.encode(query)
         openCustomTab(youtubeSearchUrl)
-        /*
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            data = youtubeSearchUrl.toUri()
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        }
-        try {
-            intent.setPackage("org.chromium.chrome.stable")
-            startActivity(intent)
-            Log.d(TAG, "Launching Chromium with query: $query")
-        } catch (e: ActivityNotFoundException) {
-            Log.w(TAG, "Chromium not found. Launching default browser.")
-            intent.setPackage(null)
-            startActivity(intent)
-        }
-         */
     }
 
     private fun restartSilenceCheckJob() {
