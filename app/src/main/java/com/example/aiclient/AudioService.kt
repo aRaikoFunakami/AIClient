@@ -351,24 +351,26 @@ class AudioService : Service() {
         val vehicleStatusJson = JSONObject().apply {
             put("type", "vehicle_status")
             put("description", "This JSON represents the current vehicle status.")
-            put("speed", JSONObject().apply {
-                put("value", speed)
-                put("unit", "km/h")
+            put("vehicle_data", JSONObject().apply {
+                put("speed", JSONObject().apply {
+                    put("value", speed)
+                    put("unit", "km/h")
+                })
+                put("indoor_temperature", JSONObject().apply {
+                    put("value", indoorTemperature)
+                    put("unit", "°C")
+                })
+                put("fuel_level", JSONObject().apply {
+                    put("value", fuel)
+                    put("unit", "%")
+                })
+                put("location", JSONObject().apply {
+                    put("latitude", latitude)
+                    put("longitude", longitude)
+                })
+                put("address", address)
+                put("timestamp", timestamp)
             })
-            put("indoor_temperature", JSONObject().apply {
-                put("value", indoorTemperature)
-                put("unit", "°C")
-            })
-            put("fuel_level", JSONObject().apply {
-                put("value", fuel)
-                put("unit", "%")
-            })
-            put("location", JSONObject().apply {
-                put("latitude", latitude)
-                put("longitude", longitude)
-            })
-            put("address", address)
-            put("timestamp", timestamp)
         }
         webSocket?.send(vehicleStatusJson.toString())
         Log.d(TAG, "Sent vehicle data JSON: $vehicleStatusJson.toString()")
@@ -408,6 +410,7 @@ class AudioService : Service() {
                 "tools.aircontrol_delta" -> handleAirControlDelta(json)
                 "tools.search_videos" -> handleSearchVideos(json)
                 "tools.launch_navigation" -> handleLaunchNavigation(json)
+                "proposal_video" -> handleProposalVideo(json)
                 else -> Log.w(TAG, "Unhandled type: $type")
             }
         } catch (e: Exception) {
@@ -437,7 +440,18 @@ class AudioService : Service() {
             Log.e(TAG, "Failed to open QR Code Page", e)
         }
     }
+    private fun handleProposalVideo(json: JSONObject) {
+        // Log the formatted JSON content
+        Log.e(TAG, "ProposalVideo:\n${json.toString(4)}")
 
+        // Extract "video_url" from JSON
+        val videoUrl = json.optString("video_url", "")
+        if (videoUrl.isNotEmpty()) {
+            openCustomTab(videoUrl)
+        } else {
+            Log.e(TAG, "video_url is missing or empty")
+        }
+    }
     private fun handleAudioDelta(json: JSONObject) {
         val delta = json.optString("delta", "")
         if (delta.isNotEmpty()) {
