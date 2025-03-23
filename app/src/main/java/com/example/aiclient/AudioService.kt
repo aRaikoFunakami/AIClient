@@ -493,8 +493,23 @@ class AudioService : Service() {
         }
     }
 
+    /**
+     * Stops current audio playback immediately.
+     */
+    private fun stopAudioPlayback() {
+        audioPlaybackQueue.clear() // キュー内の音声データもクリア
+        audioTrack?.pause()        // 再生中なら一時停止
+        audioTrack?.flush()        // バッファをクリア
+
+        audioTrack?.play()          // 次回データの再生のため
+        Log.d(TAG, "Audio playback stopped due to new DemoAction")
+    }
     private fun handleDemoAction(json: JSONObject) {
         Log.e(TAG, "DemoAction:\n${json.toString(4)}")
+
+        // 再生中の音声を停止
+        stopAudioPlayback()
+
         val videoUrl = json.optString("video_url", "")
         if (videoUrl.isNotEmpty()) {
             openCustomTab(videoUrl)
