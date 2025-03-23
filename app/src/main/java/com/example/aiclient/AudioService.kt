@@ -267,7 +267,7 @@ class AudioService : Service() {
             var lastUpdateTime = System.currentTimeMillis()
             val SILENCE_THRESHOLD_MILLIS = 1000L
 
-            while (isActive && audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+            while (isActive) {
                 // --- Added for suspend/resume feature ---
                 // If audio is suspended, just continue without reading data.
                 if (isAudioSuspended) {
@@ -438,9 +438,10 @@ class AudioService : Service() {
         }
     }
 
-    private fun openCustomTab(url: String) {
+    private fun openCustomTab(url: String, shouldPauseAudio: Boolean = true) {
         val intent = Intent(this, CustomTabActivity::class.java).apply {
             putExtra("url", url)
+            putExtra("pause_audio", shouldPauseAudio) // Pass the pause_audio flag
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
         }

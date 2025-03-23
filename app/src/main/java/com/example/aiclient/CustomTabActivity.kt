@@ -17,7 +17,7 @@ class CustomTabActivity : AppCompatActivity() {
         }
 
         // Check if we need to pause audio
-        val shouldPauseAudio = intent.getBooleanExtra("pause_audio", false)
+        val shouldPauseAudio = intent.getBooleanExtra("pause_audio", true)
         if (shouldPauseAudio) {
             // Send PAUSE_AUDIO action to AudioService
             val pauseIntent = Intent(this, AudioService::class.java).apply {
