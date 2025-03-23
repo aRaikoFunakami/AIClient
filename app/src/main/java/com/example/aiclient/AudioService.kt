@@ -411,6 +411,7 @@ class AudioService : Service() {
                 "tools.search_videos" -> handleSearchVideos(json)
                 "tools.launch_navigation" -> handleLaunchNavigation(json)
                 "proposal_video" -> handleProposalVideo(json)
+                "demo_action" -> handleDemoAction(json)
                 else -> Log.w(TAG, "Unhandled type: $type")
             }
         } catch (e: Exception) {
@@ -444,6 +445,17 @@ class AudioService : Service() {
         // Log the formatted JSON content
         Log.e(TAG, "ProposalVideo:\n${json.toString(4)}")
 
+        // Extract "video_url" from JSON
+        val videoUrl = json.optString("video_url", "")
+        if (videoUrl.isNotEmpty()) {
+            openCustomTab(videoUrl)
+        } else {
+            Log.e(TAG, "video_url is missing or empty")
+        }
+    }
+    private fun handleDemoAction(json: JSONObject) {
+        // Log the formatted JSON content
+        Log.e(TAG, "DemoAction:\n${json.toString(4)}")
         // Extract "video_url" from JSON
         val videoUrl = json.optString("video_url", "")
         if (videoUrl.isNotEmpty()) {
