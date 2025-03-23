@@ -422,6 +422,8 @@ class AudioService : Service() {
         val intent = Intent(this, CustomTabActivity::class.java).apply {
             putExtra("url", url)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            // FLAG_ACTIVITY_MULTIPLE_TASK is required to launch a new instance of CustomTabActivity.
+            // Without it, the existing activity is reused and only onNewIntent() is called, causing the second CustomTab not to open.
             addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
         }
         startActivity(intent)
