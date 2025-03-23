@@ -10,7 +10,6 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Base64
 import android.util.Log
-import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.app.ActivityCompat
 import kotlinx.coroutines.*
 import okhttp3.OkHttpClient
@@ -42,6 +41,10 @@ class AudioService : Service() {
         const val EXTRA_TEMPERATURE = "extra_temperature"
         const val ACTION_UPDATE_URL = "com.example.aiclient.action.UPDATE_URL"
         const val EXTRA_WEBSOCKET_URL = "com.example.aiclient.extra.WEBSOCKET_URL"
+
+        // --- Added for suspend/resume feature ---
+        const val ACTION_SUSPEND_AUDIO_INPUT = "com.example.aiclient.action.SUSPEND_AUDIO_INPUT"
+        const val ACTION_RESUME_AUDIO_INPUT = "com.example.aiclient.action.RESUME_AUDIO_INPUT"
     }
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -67,6 +70,11 @@ class AudioService : Service() {
 
     private val lastAudioReceivedTime = AtomicLong(0)
     private var silenceCheckJob: Job? = null
+
+    // --- Added for suspend/resume feature ---
+    // This flag indicates whether the audio input (microphone) is currently suspended.
+    // When suspended, audioRecord is stopped, and sendJob won't capture audio data.
+    private var isAudioSuspended: Boolean = false
 
     override fun onCreate() {
         super.onCreate()
@@ -95,6 +103,7 @@ class AudioService : Service() {
             }
         }
     }
+
     private fun getServerUrl(webSocketUrl: String): String {
         return if (webSocketUrl.startsWith("ws://") || webSocketUrl.startsWith("wss://")) {
             webSocketUrl.replace("ws://", "http://").replace("wss://", "https://").substringBeforeLast("/ws")
@@ -115,6 +124,7 @@ class AudioService : Service() {
             timestamp = it.getStringExtra("timestamp") ?: ""
             websocketUrl = it.getStringExtra(EXTRA_WEBSOCKET_URL) ?: websocketUrl
             qrCodeUrl = getServerUrl(websocketUrl) + "/generate_qr" // `generate_qr` のURLを設定
+
             when (it.action) {
                 ACTION_START_PROCESSING -> {
                     // WebSocket URL のバリデーションを再確認
@@ -128,9 +138,8 @@ class AudioService : Service() {
                         isRunning = true
                         startAudioProcessing()
                     } else {
-                        Log.e(TAG, "isRunning: ${isRunning}")
+                        Log.e(TAG, "isRunning: $isRunning")
                     }
-
                 }
 
                 ACTION_UPDATE_URL -> {
@@ -140,10 +149,18 @@ class AudioService : Service() {
                         websocketUrl = newUrl
                         // 必要に応じて WebSocket 接続を再構築
                         restartWebSocket()
+                    } else {
+                        Log.e(TAG, "WS_URL: $websocketUrl")
                     }
-                    else {
-                        Log.e(TAG, "WS_URL: ${websocketUrl}")
-                    }
+                }
+
+                // --- Added for suspend/resume feature ---
+                ACTION_SUSPEND_AUDIO_INPUT -> {
+                    suspendAudioInput()
+                }
+
+                ACTION_RESUME_AUDIO_INPUT -> {
+                    resumeAudioInput()
                 }
 
                 else -> {
@@ -225,7 +242,7 @@ class AudioService : Service() {
         )
         audioTrack?.play()
 
-        Log.e(TAG, "WebSocket connect to : ${websocketUrl}")
+        Log.e(TAG, "WebSocket connect to : $websocketUrl")
         val client = OkHttpClient()
         val request = Request.Builder().url(websocketUrl).build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
@@ -251,6 +268,13 @@ class AudioService : Service() {
             val SILENCE_THRESHOLD_MILLIS = 1000L
 
             while (isActive && audioRecord?.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                // --- Added for suspend/resume feature ---
+                // If audio is suspended, just continue without reading data.
+                if (isAudioSuspended) {
+                    delay(200)  // Prevent busy-loop; adjust as needed
+                    continue
+                }
+
                 val read = audioRecord!!.read(sendBuffer, 0, BLOCK_SIZE)
                 if (read > 0) {
                     val rms = calculateRMS(sendBuffer, read)
@@ -326,10 +350,6 @@ class AudioService : Service() {
         }
 
         val jsonString = json.toString()
-
-        // 送信データの最初の100文字のみ表示
-        // Log.d(TAG, "Audio JSON: ${jsonString.take(100)}...")
-
         val success = webSocket?.send(jsonString) ?: false
         if (!success) {
             Log.e(TAG, "Failed to send audio data. WebSocket might be disconnected.")
@@ -381,11 +401,11 @@ class AudioService : Service() {
      */
     private fun isJson(text: String): Boolean {
         return try {
-            JSONObject(text) // Try parsing as JSON object
+            JSONObject(text)
             true
         } catch (ex: JSONException) {
             try {
-                JSONArray(text) // If it fails, try parsing as JSON array
+                JSONArray(text)
                 true
             } catch (ex2: JSONException) {
                 false
@@ -396,7 +416,6 @@ class AudioService : Service() {
     private fun handleIncomingMessage(text: String) {
         Log.d(TAG, "handleIncomingMessage: $text")
 
-        // JSON 形式かどうかチェック
         if (!isJson(text)) {
             Log.e(TAG, "Ignore non-JSON message: $text")
             return
@@ -418,20 +437,20 @@ class AudioService : Service() {
             Log.e(TAG, "Failed to parse message: $text", e)
         }
     }
+
     private fun openCustomTab(url: String) {
         val intent = Intent(this, CustomTabActivity::class.java).apply {
             putExtra("url", url)
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            // FLAG_ACTIVITY_MULTIPLE_TASK is required to launch a new instance of CustomTabActivity.
-            // Without it, the existing activity is reused and only onNewIntent() is called, causing the second CustomTab not to open.
             addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
         }
         startActivity(intent)
     }
+
     private fun handleQrCodePage(json: JSONObject) {
         try {
             val clientId = json.getString("client_id")
-            val qrUrl = "$qrCodeUrl?client_id=$clientId" // `generate_qr` に `client_id` を追加
+            val qrUrl = "$qrCodeUrl?client_id=$clientId"
 
             openCustomTab(qrUrl)
 
@@ -440,11 +459,9 @@ class AudioService : Service() {
             Log.e(TAG, "Failed to open QR Code Page", e)
         }
     }
-    private fun handleProposalVideo(json: JSONObject) {
-        // Log the formatted JSON content
-        Log.e(TAG, "ProposalVideo:\n${json.toString(4)}")
 
-        // Extract "video_url" from JSON
+    private fun handleProposalVideo(json: JSONObject) {
+        Log.e(TAG, "ProposalVideo:\n${json.toString(4)}")
         val videoUrl = json.optString("video_url", "")
         if (videoUrl.isNotEmpty()) {
             openCustomTab(videoUrl)
@@ -452,10 +469,9 @@ class AudioService : Service() {
             Log.e(TAG, "video_url is missing or empty")
         }
     }
+
     private fun handleDemoAction(json: JSONObject) {
-        // Log the formatted JSON content
         Log.e(TAG, "DemoAction:\n${json.toString(4)}")
-        // Extract "video_url" from JSON
         val videoUrl = json.optString("video_url", "")
         if (videoUrl.isNotEmpty()) {
             openCustomTab(videoUrl)
@@ -463,6 +479,7 @@ class AudioService : Service() {
             Log.e(TAG, "video_url is missing or empty")
         }
     }
+
     private fun handleAudioDelta(json: JSONObject) {
         val delta = json.optString("delta", "")
         if (delta.isNotEmpty()) {
@@ -597,7 +614,7 @@ class AudioService : Service() {
         val intent = Intent().apply {
             action = ACTION_UPDATE_TEMPERATURE
             putExtra(EXTRA_TEMPERATURE, temp)
-            setPackage(packageName) // アプリ内に限定
+            setPackage(packageName)
         }
         sendBroadcast(intent)
     }
@@ -607,6 +624,47 @@ class AudioService : Service() {
         webSocket = null
         // 再接続
         startAudioProcessing()
+    }
+
+    // --- Added for suspend/resume feature ---
+    /**
+     * Suspends the audio input by stopping the AudioRecord instance.
+     * This prevents any new data from being read and sent to the server.
+     */
+    private fun suspendAudioInput() {
+        if (isRunning && !isAudioSuspended) {
+            audioRecord?.let {
+                if (it.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                    it.stop()
+                    isAudioSuspended = true
+                    Log.d(TAG, "Audio input suspended.")
+                } else {
+                    Log.w(TAG, "AudioRecord is not in RECORDSTATE_RECORDING.")
+                }
+            }
+        } else {
+            Log.w(TAG, "Cannot suspend. Service is not running or audio is already suspended.")
+        }
+    }
+
+    /**
+     * Resumes the audio input by starting the AudioRecord instance again.
+     * This allows new data to be captured and sent to the server.
+     */
+    private fun resumeAudioInput() {
+        if (isRunning && isAudioSuspended) {
+            audioRecord?.let {
+                if (it.state == AudioRecord.STATE_INITIALIZED && it.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+                    it.startRecording()
+                    isAudioSuspended = false
+                    Log.d(TAG, "Audio input resumed.")
+                } else {
+                    Log.w(TAG, "AudioRecord is not in a state that allows startRecording().")
+                }
+            }
+        } else {
+            Log.w(TAG, "Cannot resume. Service is not running or audio is not suspended.")
+        }
     }
 
     private fun requestPermissionsIfNeeded() {
