@@ -418,16 +418,13 @@ class AudioService : Service() {
             Log.e(TAG, "Failed to parse message: $text", e)
         }
     }
-
     private fun openCustomTab(url: String) {
-        // If the nested class is not resolved by an import, use full reference.
-        val customTabsIntent = CustomTabsIntent.Builder().build()
-
-        // Add FLAG_ACTIVITY_NEW_TASK to ensure the activity can be launched from a Service
-        customTabsIntent.intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-
-        // Use 'this' (the Service instance) as the Context
-        customTabsIntent.launchUrl(this, url.toUri())
+        val intent = Intent(this, CustomTabActivity::class.java).apply {
+            putExtra("url", url)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+        }
+        startActivity(intent)
     }
     private fun handleQrCodePage(json: JSONObject) {
         try {

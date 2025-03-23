@@ -32,5 +32,12 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".CustomTabActivity"
+            android:theme="@style/AppTheme.Transparent"
+            android:exported="false"
+            android:taskAffinity="com.example.aiclient.customtab"
+            android:excludeFromRecents="true" />
     </application>
 </manifest>
