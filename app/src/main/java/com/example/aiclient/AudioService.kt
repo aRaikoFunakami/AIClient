@@ -24,6 +24,8 @@ import kotlin.math.pow
 import kotlin.math.sqrt
 import androidx.core.net.toUri
 import org.json.JSONException
+import java.util.concurrent.BlockingQueue
+import java.util.concurrent.LinkedBlockingQueue
 
 
 class AudioService : Service() {
@@ -75,6 +77,10 @@ class AudioService : Service() {
     // This flag indicates whether the audio input (microphone) is currently suspended.
     // When suspended, audioRecord is stopped, and sendJob won't capture audio data.
     private var isAudioSuspended: Boolean = false
+
+    // AudioService内に追加（フィールド）
+    private val audioPlaybackQueue: BlockingQueue<ByteArray> = LinkedBlockingQueue()
+    private var audioPlaybackJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -246,7 +252,11 @@ class AudioService : Service() {
         val client = OkHttpClient()
         val request = Request.Builder().url(websocketUrl).build()
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
+            private var totalReceivedBytes = AtomicLong(0)
             override fun onMessage(webSocket: WebSocket, text: String) {
+                val size :Long = text.toByteArray().size.toLong()
+                totalReceivedBytes.addAndGet(size)
+                Log.d(TAG, "Received WebSocket message size: ${size} bytes, total received: ${totalReceivedBytes.get()} bytes")
                 handleIncomingMessage(text)
             }
 
@@ -256,6 +266,18 @@ class AudioService : Service() {
         })
 
         audioRecord?.startRecording()
+        // AudioPlayback Job（音声再生専用コルーチン）
+        audioPlaybackJob = serviceScope.launch {
+            try {
+                while (isActive) {
+                    val audioChunk = audioPlaybackQueue.take()  // キューから取り出し（ブロッキング）
+                    audioTrack?.write(audioChunk, 0, audioChunk.size)
+                    Log.d(TAG, "Audio chunk played: ${audioChunk.size} bytes")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Audio playback loop error", e)
+            }
+        }
         // サーバーから音声がくるまで受け付けない
         isPlayingAudio = true
 
@@ -291,7 +313,7 @@ class AudioService : Service() {
                             repeat(BLOCK_SIZE) { accumulated.removeAt(0) }
 
                             if (!isAudioSentRecently) {
-                                sendVehicleDataAsJson(temp, speed, fuel, latitude, longitude, address, timestamp)
+                                //sendVehicleDataAsJson(temp, speed, fuel, latitude, longitude, address, timestamp)
                             }
                             sendAudio(toSend)
                             isAudioSentRecently = true
@@ -488,8 +510,10 @@ class AudioService : Service() {
             isPlayingAudio = true
             lastAudioReceivedTime.set(System.currentTimeMillis())
             restartSilenceCheckJob()
-            audioTrack?.write(decoded, 0, decoded.size)
-            Log.d(TAG, "Audio delta processed")
+
+            // AudioTrackへの直接書き込みをやめてキューに入れる
+            audioPlaybackQueue.offer(decoded)
+            Log.d(TAG, "Audio delta queued for playback: ${decoded.size} bytes")
         }
     }
 
@@ -585,6 +609,8 @@ class AudioService : Service() {
         audioRecord?.release()
         audioRecord = null
 
+        audioPlaybackJob?.cancel()
+        audioPlaybackQueue.clear()
         audioTrack?.stop()
         audioTrack?.release()
         audioTrack = null
