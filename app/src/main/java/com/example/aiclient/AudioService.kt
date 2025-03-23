@@ -26,6 +26,7 @@ import androidx.core.net.toUri
 import org.json.JSONException
 import java.util.concurrent.BlockingQueue
 import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
 
 
 class AudioService : Service() {
@@ -270,16 +271,29 @@ class AudioService : Service() {
         audioPlaybackJob = serviceScope.launch {
             try {
                 while (isActive) {
-                    val audioChunk = audioPlaybackQueue.take()  // キューから取り出し（ブロッキング）
+                    // ここでタイムアウト付きブロッキング
+                    val audioChunk = audioPlaybackQueue.poll(2000, TimeUnit.MILLISECONDS)
+                    // データあれば再生開始
+                    if (audioChunk == null) {
+                        // 2秒間音声が来なかったら「再生中終了」とみなす
+                        isPlayingAudio = false
+                        Log.d(TAG, "No audio chunk received for 2s. Marking playback as finished: isPlayingAudio = false")
+                        continue  // breakせず待機継続（必要なら break にしてもOK）
+                    } else {
+                        isPlayingAudio = true
+                        Log.d(TAG, "Audio chunk received. Marking playback as finished: isPlayingAudio = true")
+                    }
                     audioTrack?.write(audioChunk, 0, audioChunk.size)
                     Log.d(TAG, "Audio chunk played: ${audioChunk.size} bytes")
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Audio playback loop error", e)
+                isPlayingAudio = false
             }
         }
         // サーバーから音声がくるまで受け付けない
         isPlayingAudio = true
+        Log.d(TAG, "waiting 1st sound from server: isPlayingAudio = true")
 
         sendJob = serviceScope.launch {
             val sendBuffer = ByteArray(BLOCK_SIZE)
@@ -523,6 +537,7 @@ class AudioService : Service() {
         if (delta.isNotEmpty()) {
             val decoded = Base64.decode(delta, Base64.NO_WRAP)
             isPlayingAudio = true
+            Log.d(TAG, "handleAudioDelta: isPlayingAudio = true")
             lastAudioReceivedTime.set(System.currentTimeMillis())
             restartSilenceCheckJob()
 
