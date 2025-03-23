@@ -45,7 +45,7 @@ class AudioService : Service() {
         const val EXTRA_WEBSOCKET_URL = "com.example.aiclient.extra.WEBSOCKET_URL"
 
         // --- Added for suspend/resume feature ---
-        const val ACTION_SUSPEND_AUDIO_INPUT = "com.example.aiclient.action.SUSPEND_AUDIO_INPUT"
+        const val ACTION_PAUSE_AUDIO_INPUT = "com.example.aiclient.action.PAUSE_AUDIO_INPUT"
         const val ACTION_RESUME_AUDIO_INPUT = "com.example.aiclient.action.RESUME_AUDIO_INPUT"
     }
 
@@ -161,7 +161,7 @@ class AudioService : Service() {
                 }
 
                 // --- Added for suspend/resume feature ---
-                ACTION_SUSPEND_AUDIO_INPUT -> {
+                ACTION_PAUSE_AUDIO_INPUT -> {
                     suspendAudioInput()
                 }
 
