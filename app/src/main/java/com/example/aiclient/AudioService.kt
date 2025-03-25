@@ -580,6 +580,7 @@ class AudioService : Service() {
                 "tools.launch_navigation" -> handleLaunchNavigation(json)
                 "proposal_video" -> handleProposalVideo(json)
                 "demo_action" -> handleDemoAction(json)
+                "stop_conversation" -> handleStopConversation(json)
                 else -> Log.w(TAG, "Unhandled type: $type")
             }
         } catch (e: Exception) {
@@ -627,15 +628,15 @@ class AudioService : Service() {
         audioPlaybackQueue.clear() // キュー内の音声データもクリア
         audioTrack?.pause()        // 再生中なら一時停止
         audioTrack?.flush()        // バッファをクリア
-        Log.e(TAG, "stopAudioPlayback : audioTrack?.pause()")
+        Log.d(TAG, "stopAudioPlayback : audioTrack?.pause()")
         Log.d(TAG, "Audio playback stopped due to new DemoAction")
 
         audioTrack?.play()          // 次回データの再生のため
-        Log.e(TAG, "stopAudioPlayback : audioTrack?.play()")
+        Log.d(TAG, "stopAudioPlayback : audioTrack?.play()")
 
     }
     private fun handleDemoAction(json: JSONObject) {
-        Log.e(TAG, "DemoAction:\n${json.toString(4)}")
+        Log.d(TAG, "DemoAction:\n${json.toString(4)}")
 
         // 再生中の音声を停止
         stopAudioPlayback()
@@ -646,6 +647,12 @@ class AudioService : Service() {
         } else {
             Log.e(TAG, "video_url is missing or empty")
         }
+    }
+    private fun handleStopConversation(json: JSONObject) {
+        Log.d(TAG, "StopConversation:\n${json.toString(4)}")
+
+        // 再生中の音声を停止
+        stopAudioPlayback()
     }
 
     private fun handleAudioDelta(json: JSONObject) {
