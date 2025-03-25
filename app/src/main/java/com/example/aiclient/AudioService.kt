@@ -7,9 +7,12 @@ import android.content.*
 import android.content.pm.PackageManager
 import android.media.*
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.Base64
 import android.util.Log
+import android.widget.Toast
 import androidx.core.app.ActivityCompat
 import kotlinx.coroutines.*
 import okhttp3.OkHttpClient
@@ -32,56 +35,80 @@ import java.util.concurrent.TimeUnit
 class AudioService : Service() {
     companion object {
         const val TAG = "AudioService"
+
+        // Audio constants
         const val SAMPLE_RATE = 24000
         const val BLOCK_SIZE = 4800
-        var websocketUrl = ""//""ws://192.168.1.100:3000/ws" // デフォルトURLを変数に変更
-        var qrCodeUrl = ""    // QRコードページのURL
         const val SILENCE_THRESHOLD_MS = 2000L
         const val SILENCE_THRESHOLD = 50.0f
 
+        // Actions and extras
         const val ACTION_START_PROCESSING = "com.example.aiclient.action.START_PROCESSING"
         const val ACTION_UPDATE_TEMPERATURE = "com.example.aiclient.UPDATE_TEMPERATURE"
         const val EXTRA_TEMPERATURE = "extra_temperature"
         const val ACTION_UPDATE_URL = "com.example.aiclient.action.UPDATE_URL"
         const val EXTRA_WEBSOCKET_URL = "com.example.aiclient.extra.WEBSOCKET_URL"
 
-        // --- Added for suspend/resume feature ---
+        // Audio ON/OFF
         const val ACTION_PAUSE_AUDIO_INPUT = "com.example.aiclient.action.PAUSE_AUDIO_INPUT"
         const val ACTION_RESUME_AUDIO_INPUT = "com.example.aiclient.action.RESUME_AUDIO_INPUT"
+
+        // Broadcasts to notify MainActivity (or others) of state changes
+        const val ACTION_STATE_CHANGED = "com.example.aiclient.action.STATE_CHANGED"
+        const val EXTRA_AUDIO_ON = "extra_audio_on"
+        const val EXTRA_WS_CONNECTED = "extra_ws_connected"
+
+        // Notification channel/id
+        const val FOREGROUND_CHANNEL_ID = "audio_service_channel"
+        const val FOREGROUND_NOTIFICATION_ID = 1
+
+        // SharedPreferences key for client_id
+        private const val PREFS_NAME = "audio_service_prefs"
+        private const val KEY_CLIENT_ID = "key_client_id"
     }
 
+    // Coroutine scope for background tasks
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private var audioRecord: AudioRecord? = null
     private var audioTrack: AudioTrack? = null
     private var webSocket: WebSocket? = null
 
+    // Main flag
     private var isRunning = false
     private var sendJob: Job? = null
 
-    private var temp: Int = 20
+    // For demonstration, any data from extras
+    private var temperature: Int = 20
     private var speed: Int = 0
     private var fuel: Int = 100
-
     private var latitude: Double = 35.6997837
     private var longitude: Double = 139.7741138
     private var address: String = "Unknown"
     private var timestamp: String = ""
 
+    // Audio playback
     @Volatile
     private var isPlayingAudio = false
-
     private val lastAudioReceivedTime = AtomicLong(0)
     private var silenceCheckJob: Job? = null
-
-    // --- Added for suspend/resume feature ---
-    // This flag indicates whether the audio input (microphone) is currently suspended.
-    // When suspended, audioRecord is stopped, and sendJob won't capture audio data.
-    private var isAudioSuspended: Boolean = false
-
-    // AudioService内に追加（フィールド）
     private val audioPlaybackQueue: BlockingQueue<ByteArray> = LinkedBlockingQueue()
     private var audioPlaybackJob: Job? = null
+
+    // Audio ON/OFF
+    @Volatile
+    private var isAudioSuspended: Boolean = false
+
+    // WebSocket
+    @Volatile
+    private var wsConnected: Boolean = false
+    private var websocketUrl: String = ""
+    private var qrCodeUrl : String = ""
+    private var clientId : String = ""
+
+    // Reconnect settings
+    private var reconnectDelayMs = 3000L  // Delay for re-connection
+    private var reconnectJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -100,76 +127,69 @@ class AudioService : Service() {
         startForegroundService()
     }
 
-    private var currentTemperature: Int = 20
-
+    /**
+     * Broadcast receiver to receive updated temperature from other components.
+     */
     private val temperatureReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == ACTION_UPDATE_TEMPERATURE) {
-                temp = intent.getIntExtra(EXTRA_TEMPERATURE, currentTemperature)
-                Log.d(TAG, "Received temperature update: $temp")
+                val newTemp = intent.getIntExtra(EXTRA_TEMPERATURE, temperature)
+                temperature = newTemp
+                Log.d(TAG, "Received temperature update: $temperature")
             }
         }
     }
 
+    // -----------------------------
+    // Utility
+    // -----------------------------
     private fun getServerUrl(webSocketUrl: String): String {
         return if (webSocketUrl.startsWith("ws://") || webSocketUrl.startsWith("wss://")) {
-            webSocketUrl.replace("ws://", "http://").replace("wss://", "https://").substringBeforeLast("/ws")
+            webSocketUrl.replace("ws://", "http://")
+                .replace("wss://", "https://")
+                .substringBeforeLast("/ws")
         } else {
             ""
         }
     }
 
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         intent?.let {
-            // 必要なエクストラを取得
-            temp = it.getIntExtra("temp", 20)
-            speed = it.getIntExtra("speed", 60)
-            fuel = it.getIntExtra("fuel", 50)
-            latitude = it.getDoubleExtra("latitude", 35.6997837)
-            longitude = it.getDoubleExtra("longitude", 139.7741138)
-            address = it.getStringExtra("address") ?: "Unknown"
-            timestamp = it.getStringExtra("timestamp") ?: ""
             websocketUrl = it.getStringExtra(EXTRA_WEBSOCKET_URL) ?: websocketUrl
-            qrCodeUrl = getServerUrl(websocketUrl) + "/generate_qr" // `generate_qr` のURLを設定
+            // Optional data
+            temperature = it.getIntExtra("temp", temperature)
+            speed = it.getIntExtra("speed", speed)
+            fuel = it.getIntExtra("fuel", fuel)
+            latitude = it.getDoubleExtra("latitude", latitude)
+            longitude = it.getDoubleExtra("longitude", longitude)
+            address = it.getStringExtra("address") ?: address
+            timestamp = it.getStringExtra("timestamp") ?: timestamp
+
+            // Update QR code URL
+            qrCodeUrl = getServerUrl(websocketUrl) + "/generate_qr"
 
             when (it.action) {
                 ACTION_START_PROCESSING -> {
-                    // WebSocket URL のバリデーションを再確認
-                    if (websocketUrl.isEmpty() || (!websocketUrl.startsWith("ws://") && !websocketUrl.startsWith("wss://"))) {
-                        Log.e(TAG, "無効なWebSocket URL: $websocketUrl")
-                        stopSelf()
-                        return START_NOT_STICKY
-                    }
-
                     if (!isRunning) {
                         isRunning = true
                         startAudioProcessing()
-                    } else {
-                        Log.e(TAG, "isRunning: $isRunning")
-                    }
+                    } else { ; }
                 }
-
                 ACTION_UPDATE_URL -> {
-                    // WebSocket URL の更新処理
+                    // If we get new URL
                     val newUrl = it.getStringExtra(EXTRA_WEBSOCKET_URL)
                     if (!newUrl.isNullOrEmpty()) {
                         websocketUrl = newUrl
-                        // 必要に応じて WebSocket 接続を再構築
                         restartWebSocket()
-                    } else {
-                        Log.e(TAG, "WS_URL: $websocketUrl")
-                    }
+                    } else { ; }
                 }
-
-                // --- Added for suspend/resume feature ---
                 ACTION_PAUSE_AUDIO_INPUT -> {
-                    suspendAudioInput()
+                    toggleAudioInput(false)
                 }
-
                 ACTION_RESUME_AUDIO_INPUT -> {
-                    resumeAudioInput()
+                    toggleAudioInput(true)
                 }
-
                 else -> {
                     Log.w(TAG, "Unhandled action: ${it.action}")
                 }
@@ -249,24 +269,12 @@ class AudioService : Service() {
         )
         audioTrack?.play()
 
-        Log.e(TAG, "WebSocket connect to : $websocketUrl")
-        val client = OkHttpClient()
-        val request = Request.Builder().url(websocketUrl).build()
-        webSocket = client.newWebSocket(request, object : WebSocketListener() {
-            private var totalReceivedBytes = AtomicLong(0)
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                val size :Long = text.toByteArray().size.toLong()
-                totalReceivedBytes.addAndGet(size)
-                Log.d(TAG, "Received WebSocket message size: ${size} bytes, total received: ${totalReceivedBytes.get()} bytes")
-                handleIncomingMessage(text)
-            }
+        // Connect WebSocket
+        connectWebSocket()
 
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                Log.e(TAG, "WebSocket onFailure: ${t.localizedMessage}")
-            }
-        })
-
+        // Start recording
         audioRecord?.startRecording()
+
         // AudioPlayback Job（音声再生専用コルーチン）
         audioPlaybackJob = serviceScope.launch {
             try {
@@ -277,10 +285,16 @@ class AudioService : Service() {
                     if (audioChunk == null) {
                         // 2秒間音声が来なかったら「再生中終了」とみなす
                         isPlayingAudio = false
+                        if (!isAudioSuspended) {
+                            showToast("Audio input is active.<AI is silent>")
+                        } else {
+                            showToast("Pausing audio input.<Please close the launched application>")
+                        }
                         Log.d(TAG, "No audio chunk received for 2s. Marking playback as finished: isPlayingAudio = false")
                         continue  // breakせず待機継続（必要なら break にしてもOK）
                     } else {
                         isPlayingAudio = true
+                        showToast("Pausing audio input.<AI is speaking>")
                         Log.d(TAG, "Audio chunk received. Marking playback as finished: isPlayingAudio = true")
                     }
                     audioTrack?.write(audioChunk, 0, audioChunk.size)
@@ -289,84 +303,156 @@ class AudioService : Service() {
             } catch (e: Exception) {
                 Log.e(TAG, "Audio playback loop error", e)
                 isPlayingAudio = false
+                showToast("Audio input is active.<Exception>")
             }
         }
+
         // サーバーから音声がくるまで受け付けない
         isPlayingAudio = true
+        showToast("Pausing audio input.<waiting 1st sound from server>")
         Log.d(TAG, "waiting 1st sound from server: isPlayingAudio = true")
 
+        // Mic reading job
         sendJob = serviceScope.launch {
             val sendBuffer = ByteArray(BLOCK_SIZE)
-            val accumulated = mutableListOf<Byte>()
+            var accumulated = mutableListOf<Byte>()
             var silenceDuration = 0L
-            var isAudioSentRecently = false
             var lastUpdateTime = System.currentTimeMillis()
             val SILENCE_THRESHOLD_MILLIS = 1000L
 
             while (isActive) {
-                // --- Added for suspend/resume feature ---
-                // If audio is suspended, just continue without reading data.
                 if (isAudioSuspended) {
-                    delay(200)  // Prevent busy-loop; adjust as needed
+                    delay(200)
                     continue
                 }
 
-                val read = audioRecord!!.read(sendBuffer, 0, BLOCK_SIZE)
-                if (read > 0) {
-                    val rms = calculateRMS(sendBuffer, read)
-                    val currentTime = System.currentTimeMillis()
-                    silenceDuration = updateSilenceDuration(rms, silenceDuration, currentTime, lastUpdateTime)
+                val read = audioRecord?.read(sendBuffer, 0, BLOCK_SIZE) ?: -1
+                if (read <= 0) {
+                    delay(10) // 小さな遅延を入れてCPU使用率を下げる
+                    continue
+                }
 
-                    if (isPlayingAudio || isSilent(silenceDuration, SILENCE_THRESHOLD_MILLIS)) {
-                        accumulated.clear()
-                        isAudioSentRecently = false
-                    } else {
-                        accumulated.addAll(sendBuffer.slice(0 until read))
-                        if (accumulated.size >= BLOCK_SIZE) {
-                            val toSend = accumulated.take(BLOCK_SIZE).toByteArray()
-                            repeat(BLOCK_SIZE) { accumulated.removeAt(0) }
+                val rms = calculateRMS(sendBuffer, read)
+                val currentTime = System.currentTimeMillis()
 
-                            if (!isAudioSentRecently) {
-                                //sendVehicleDataAsJson(temp, speed, fuel, latitude, longitude, address, timestamp)
-                            }
-                            sendAudio(toSend)
-                            isAudioSentRecently = true
-                        }
+                // 無音時間を更新（read > 0 の場合のみ）
+                silenceDuration = updateSilenceDuration(rms, silenceDuration, currentTime, lastUpdateTime)
+                lastUpdateTime = currentTime
+
+                // サーバーが話している or 無音状態なら送信をスキップ
+                if (isPlayingAudio || isSilent(silenceDuration, SILENCE_THRESHOLD_MILLIS)) {
+                    accumulated.clear()
+                } else {
+                    // バッファにデータ追加
+                    accumulated.addAll(sendBuffer.slice(0 until read))
+
+                    if (accumulated.size >= BLOCK_SIZE) {
+                        val toSend = accumulated.take(BLOCK_SIZE).toByteArray()
+                        accumulated = accumulated.drop(BLOCK_SIZE).toMutableList()
+                        sendAudio(toSend)
                     }
-
-                    lastUpdateTime = currentTime
                 }
             }
         }
     }
 
-    private fun updateSilenceDuration(
-        rms: Float,
-        silenceDuration: Long,
-        currentTime: Long,
-        lastUpdateTime: Long,
-    ): Long {
-        return if (rms < SILENCE_THRESHOLD) {
-            silenceDuration + (currentTime - lastUpdateTime)
+    /**
+     * Connects or reconnects the WebSocket, appending "?client_id=..." to the URL.
+     */
+    private fun connectWebSocket() {
+        // If URL is invalid, skip
+        if (!websocketUrl.startsWith("ws://") && !websocketUrl.startsWith("wss://")) {
+            Log.e(TAG, "Invalid WebSocket URL: $websocketUrl")
+            return
+        }
+
+        // Append client_id
+        val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+        val finalUrl = if (clientId.isEmpty()) {
+            websocketUrl
         } else {
-            // デバッグログ追加
-            Log.d(TAG, "RMS: $rms, SilenceThreshold: $SILENCE_THRESHOLD")
-            0L
+            if (websocketUrl.contains("?")) {
+                "$websocketUrl&client_id=$clientId"
+            } else {
+                "$websocketUrl?client_id=$clientId"
+            }
+        }
+        Log.d(TAG, "WebSocket connecting to: $finalUrl")
+
+        val client = OkHttpClient()
+        val request = Request.Builder().url(finalUrl).build()
+        webSocket = client.newWebSocket(request, object : WebSocketListener() {
+            override fun onOpen(ws: WebSocket, response: Response) {
+                wsConnected = true
+                Log.d(TAG, "WebSocket onOpen")
+            }
+
+            override fun onMessage(ws: WebSocket, text: String) {
+                handleIncomingMessage(text)
+            }
+
+            override fun onClosed(ws: WebSocket, code: Int, reason: String) {
+                Log.w(TAG, "WebSocket onClosed: $code / $reason")
+                wsConnected = false
+                scheduleReconnect() // auto reconnect
+            }
+
+            override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
+                Log.e(TAG, "WebSocket onFailure: ${t.localizedMessage}")
+                wsConnected = false
+                scheduleReconnect()
+            }
+        })
+    }
+
+    /**
+     * Schedule the reconnection after certain delay, unless already scheduled.
+     */
+    private fun scheduleReconnect() {
+        if (reconnectJob?.isActive == true) return
+        reconnectJob = serviceScope.launch {
+            delay(reconnectDelayMs)
+            Log.d(TAG, "Reconnecting WebSocket...")
+            connectWebSocket()
         }
     }
 
-    private fun isSilent(silenceDuration: Long, durationThreshold: Long): Boolean {
-        return silenceDuration >= durationThreshold
+    /**
+     * Re-start WebSocket connection if needed.
+     */
+    private fun restartWebSocket() {
+        webSocket?.close(1000, "Restarting WebSocket")
+        webSocket = null
+        wsConnected = false
+        scheduleReconnect()
     }
 
-    private fun calculateRMS(buffer: ByteArray, length: Int): Float {
-        var sum = 0.0
-        for (i in 0 until length) {
-            sum += buffer[i].toDouble().pow(2.0)
-        }
-        return sqrt(sum / length).toFloat()
+    /**
+     * Stop the entire audio processing.
+     */
+    private fun stopAudioProcessing() {
+        reconnectJob?.cancel()
+        sendJob?.cancel()
+        audioRecord?.stop()
+        audioRecord?.release()
+        audioRecord = null
+
+        audioPlaybackJob?.cancel()
+        audioPlaybackQueue.clear()
+        audioTrack?.stop()
+        audioTrack?.release()
+        audioTrack = null
+
+        webSocket?.close(1000, "Service stopped")
+        webSocket = null
+
+        silenceCheckJob?.cancel()
+        isRunning = false
     }
 
+    // ---------------------------
+    // Audio I/O helper functions
+    // ---------------------------
     private fun sendAudio(data: ByteArray) {
         if (webSocket == null) {
             Log.e(TAG, "WebSocket is null. Attempting to reconnect...")
@@ -392,6 +478,33 @@ class AudioService : Service() {
             restartWebSocket()
         } else {
             Log.d(TAG, "Sent audio data successfully.")
+        }
+    }
+
+    private fun isSilent(silenceDuration: Long, durationThreshold: Long): Boolean {
+        return silenceDuration >= durationThreshold
+    }
+
+    private fun calculateRMS(buffer: ByteArray, length: Int): Float {
+        var sum = 0.0
+        for (i in 0 until length) {
+            sum += buffer[i].toDouble().pow(2.0)
+        }
+        return sqrt(sum / length).toFloat()
+    }
+
+    private fun updateSilenceDuration(
+        rms: Float,
+        silenceDuration: Long,
+        currentTime: Long,
+        lastUpdateTime: Long,
+    ): Long {
+        return if (rms < SILENCE_THRESHOLD) {
+            silenceDuration + (currentTime - lastUpdateTime)
+        } else {
+            // デバッグログ追加
+            Log.d(TAG, "RMS: $rms, SilenceThreshold: $SILENCE_THRESHOLD")
+            0L
         }
     }
 
@@ -486,8 +599,8 @@ class AudioService : Service() {
 
     private fun handleQrCodePage(json: JSONObject) {
         try {
-            val clientId = json.getString("client_id")
-            val qrUrl = "$qrCodeUrl?client_id=$clientId"
+            clientId = json.getString("client_id")
+            val qrUrl = "$qrCodeUrl?target_id=$clientId"
 
             openCustomTab(qrUrl)
 
@@ -514,9 +627,12 @@ class AudioService : Service() {
         audioPlaybackQueue.clear() // キュー内の音声データもクリア
         audioTrack?.pause()        // 再生中なら一時停止
         audioTrack?.flush()        // バッファをクリア
+        Log.e(TAG, "stopAudioPlayback : audioTrack?.pause()")
+        Log.d(TAG, "Audio playback stopped due to new DemoAction")
 
         audioTrack?.play()          // 次回データの再生のため
-        Log.d(TAG, "Audio playback stopped due to new DemoAction")
+        Log.e(TAG, "stopAudioPlayback : audioTrack?.play()")
+
     }
     private fun handleDemoAction(json: JSONObject) {
         Log.e(TAG, "DemoAction:\n${json.toString(4)}")
@@ -537,11 +653,10 @@ class AudioService : Service() {
         if (delta.isNotEmpty()) {
             val decoded = Base64.decode(delta, Base64.NO_WRAP)
             isPlayingAudio = true
+            showToast("Pausing audio input.<server is speaking>")
             Log.d(TAG, "handleAudioDelta: isPlayingAudio = true")
             lastAudioReceivedTime.set(System.currentTimeMillis())
             restartSilenceCheckJob()
-
-            // AudioTrackへの直接書き込みをやめてキューに入れる
             audioPlaybackQueue.offer(decoded)
             Log.d(TAG, "Audio delta queued for playback: ${decoded.size} bytes")
         }
@@ -564,7 +679,7 @@ class AudioService : Service() {
         val aircontrolDelta = intent?.optJSONObject("aircontrol_delta")
         val temperatureDelta = aircontrolDelta?.optInt("temperature_delta", 0) ?: 0
         if (temperatureDelta != 0) {
-            val newTemperature = temp + temperatureDelta
+            val newTemperature = temperature + temperatureDelta
             updateTemperature(newTemperature)
             Log.d(TAG, "Temperature updated via handleAirControlDelta")
         } else {
@@ -620,6 +735,9 @@ class AudioService : Service() {
         openCustomTab(youtubeSearchUrl)
     }
 
+    // ----------------------------
+    // Silence detection for TTS
+    // ----------------------------
     private fun restartSilenceCheckJob() {
         silenceCheckJob?.cancel()
         silenceCheckJob = serviceScope.launch {
@@ -628,28 +746,34 @@ class AudioService : Service() {
             val lastTime = lastAudioReceivedTime.get()
             if (now - lastTime >= SILENCE_THRESHOLD_MS) {
                 isPlayingAudio = false
+                showToast("Audio input is active.<restartSilenceCheckJob>")
                 Log.d(TAG, "No audio received recently, isPlayingAudio = false")
             }
         }
     }
 
-    private fun stopAudioProcessing() {
-        sendJob?.cancel()
-        audioRecord?.stop()
-        audioRecord?.release()
-        audioRecord = null
-
-        audioPlaybackJob?.cancel()
-        audioPlaybackQueue.clear()
-        audioTrack?.stop()
-        audioTrack?.release()
-        audioTrack = null
-
-        webSocket?.close(1000, "Service stopped")
-        webSocket = null
-
-        silenceCheckJob?.cancel()
-        isRunning = false
+    // -----------------------------
+    // Audio ON/OFF toggling
+    // -----------------------------
+    private fun toggleAudioInput(on: Boolean) {
+        if (!isRunning) return
+        if (on) {
+            // Resume
+            if (isAudioSuspended) {
+                audioRecord?.startRecording()
+                isAudioSuspended = false
+                showToast("Audio input is active.<toggleAudioInput>")
+                Log.d(TAG, "Audio input resumed.")
+            }
+        } else {
+            // Pause
+            if (!isAudioSuspended) {
+                audioRecord?.stop()
+                isAudioSuspended = true
+                showToast("Pausing audio input.")
+                Log.d(TAG, "Audio input paused.")
+            }
+        }
     }
 
     private fun updateTemperature(temp: Int) {
@@ -676,54 +800,6 @@ class AudioService : Service() {
         sendBroadcast(intent)
     }
 
-    private fun restartWebSocket() {
-        webSocket?.close(1000, "URL updated")
-        webSocket = null
-        // 再接続
-        startAudioProcessing()
-    }
-
-    // --- Added for suspend/resume feature ---
-    /**
-     * Suspends the audio input by stopping the AudioRecord instance.
-     * This prevents any new data from being read and sent to the server.
-     */
-    private fun suspendAudioInput() {
-        if (isRunning && !isAudioSuspended) {
-            audioRecord?.let {
-                if (it.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
-                    it.stop()
-                    isAudioSuspended = true
-                    Log.d(TAG, "Audio input suspended.")
-                } else {
-                    Log.w(TAG, "AudioRecord is not in RECORDSTATE_RECORDING.")
-                }
-            }
-        } else {
-            Log.w(TAG, "Cannot suspend. Service is not running or audio is already suspended.")
-        }
-    }
-
-    /**
-     * Resumes the audio input by starting the AudioRecord instance again.
-     * This allows new data to be captured and sent to the server.
-     */
-    private fun resumeAudioInput() {
-        if (isRunning && isAudioSuspended) {
-            audioRecord?.let {
-                if (it.state == AudioRecord.STATE_INITIALIZED && it.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
-                    it.startRecording()
-                    isAudioSuspended = false
-                    Log.d(TAG, "Audio input resumed.")
-                } else {
-                    Log.w(TAG, "AudioRecord is not in a state that allows startRecording().")
-                }
-            }
-        } else {
-            Log.w(TAG, "Cannot resume. Service is not running or audio is not suspended.")
-        }
-    }
-
     private fun requestPermissionsIfNeeded() {
         val requiredPermissions = arrayOf(
             Manifest.permission.RECORD_AUDIO,
@@ -742,6 +818,14 @@ class AudioService : Service() {
             }
             startActivity(intent)
             stopSelf()
+        }
+    }
+
+    private fun showToast(message: String) {
+        // UIスレッドでToastを表示
+        Handler(Looper.getMainLooper()).post {
+            Toast.makeText(applicationContext, message, Toast.LENGTH_LONG).show()
+            Log.d("MyService", "Toast shown: $message")
         }
     }
 }
