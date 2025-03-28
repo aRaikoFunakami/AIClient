@@ -30,6 +30,7 @@ import org.json.JSONException
 import java.util.concurrent.BlockingQueue
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
+import android.content.Intent
 
 
 class AudioService : Service() {
@@ -109,6 +110,9 @@ class AudioService : Service() {
     // Reconnect settings
     private var reconnectDelayMs = 3000L  // Delay for re-connection
     private var reconnectJob: Job? = null
+
+    // Dummy token
+    private var token : String = "83031513-8AF4-4EF1-B18C-93087D2C6BCB"
 
     override fun onCreate() {
         super.onCreate()
@@ -369,12 +373,12 @@ class AudioService : Service() {
         // Append client_id
         val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
         val finalUrl = if (clientId.isEmpty()) {
-            websocketUrl
+            "$websocketUrl?token=$token"
         } else {
             if (websocketUrl.contains("?")) {
-                "$websocketUrl&client_id=$clientId"
+                "$websocketUrl&client_id=$clientId&token=$token"
             } else {
-                "$websocketUrl?client_id=$clientId"
+                "$websocketUrl?client_id=$clientId&token=$token"
             }
         }
         Log.d(TAG, "WebSocket connecting to: $finalUrl")
@@ -589,14 +593,40 @@ class AudioService : Service() {
     }
 
     private fun openCustomTab(url: String, shouldPauseAudio: Boolean = true) {
+        val finalUrl = appendTokenIfNeeded(url)
         val intent = Intent(this, CustomTabActivity::class.java).apply {
-            putExtra("url", url)
+            putExtra("url", finalUrl)
             putExtra("pause_audio", shouldPauseAudio) // Pass the pause_audio flag
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
         }
         startActivity(intent)
     }
+
+    /**
+     * Append token as query parameter if available.
+     */
+    private fun appendTokenIfNeeded(url: String): String {
+        if (token.isEmpty()) return url
+
+        val uri = url.toUri()
+        val builder = uri.buildUpon().clearQuery()
+
+        // クエリパラメータを一度全部コピーしつつ、token を除外
+        for (param in uri.queryParameterNames) {
+            if (param != "token") {
+                for (value in uri.getQueryParameters(param)) {
+                    builder.appendQueryParameter(param, value)
+                }
+            }
+        }
+
+        // token を追加（上書き or 新規追加のどちらにも対応）
+        builder.appendQueryParameter("token", token)
+
+        return builder.build().toString()
+    }
+
 
     private fun handleQrCodePage(json: JSONObject) {
         try {
@@ -719,7 +749,19 @@ class AudioService : Service() {
             return
         }
 
-        openCustomTab(googleMapsUrl)
+        val intent = Intent(Intent.ACTION_VIEW, googleMapsUrl.toUri()).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            setPackage("org.chromium.chrome.stable")
+        }
+
+        try {
+            startActivity(intent)
+            Log.d(TAG, "Launching Google Maps with URL: $googleMapsUrl")
+        } catch (e: ActivityNotFoundException) {
+            Log.w(TAG, "Chromium not found. Launching default browser.")
+            intent.setPackage(null)
+            startActivity(intent)
+        }
     }
 
     private fun handleSearchVideos(json: JSONObject) {
@@ -739,7 +781,20 @@ class AudioService : Service() {
 
     private fun searchVideosOnYoutube(query: String) {
         val youtubeSearchUrl = "https://www.youtube.com/results?search_query=" + android.net.Uri.encode(query)
-        openCustomTab(youtubeSearchUrl)
+
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            data = youtubeSearchUrl.toUri()
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        try {
+            intent.setPackage("org.chromium.chrome.stable")
+            startActivity(intent)
+            Log.d(TAG, "Launching Chromium with query: $query")
+        } catch (e: ActivityNotFoundException) {
+            Log.w(TAG, "Chromium not found. Launching default browser.")
+            intent.setPackage(null)
+            startActivity(intent)
+        }
     }
 
     // ----------------------------
