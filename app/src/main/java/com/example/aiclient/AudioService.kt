@@ -583,6 +583,7 @@ class AudioService : Service() {
                 "tools.search_videos" -> handleSearchVideos(json)
                 "tools.launch_navigation" -> handleLaunchNavigation(json)
                 "proposal_video" -> handleProposalVideo(json)
+                "proposal_ev_charge" -> handleProposalEvCharge(json)
                 "demo_action" -> handleDemoAction(json)
                 "stop_conversation" -> handleStopConversation(json)
                 else -> Log.w(TAG, "Unhandled type: $type")
@@ -649,6 +650,11 @@ class AudioService : Service() {
         } else {
             Log.e(TAG, "video_url is missing or empty")
         }
+    }
+
+    private fun handleProposalEvCharge(json: JSONObject) {
+        Log.e(TAG, "ProposalEvCharge:\n${json.toString(4)}")
+        this.handleLaunchNavigation(json)
     }
 
     /**
