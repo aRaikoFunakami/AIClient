@@ -104,7 +104,7 @@ class AudioService : Service() {
     @Volatile
     private var wsConnected: Boolean = false
     private var websocketUrl: String = ""
-    private var qrCodeUrl : String = ""
+    private var startUrl : String = ""
     private var clientId : String = ""
 
     // Reconnect settings
@@ -171,7 +171,7 @@ class AudioService : Service() {
             timestamp = it.getStringExtra("timestamp") ?: timestamp
 
             // Update QR code URL
-            qrCodeUrl = getServerUrl(websocketUrl) + "/generate_qr"
+            startUrl = getServerUrl(websocketUrl) + "/start.html"
 
             when (it.action) {
                 ACTION_START_PROCESSING -> {
@@ -576,7 +576,7 @@ class AudioService : Service() {
         try {
             val json = JSONObject(text)
             when (val type = json.optString("type", "")) {
-                "client_id" -> handleQrCodePage(json)
+                "client_id" -> handleClientId(json)
                 "response.audio.delta" -> handleAudioDelta(json)
                 "tools.aircontrol" -> handleAirControl(json)
                 "tools.aircontrol_delta" -> handleAirControlDelta(json)
@@ -629,14 +629,14 @@ class AudioService : Service() {
     }
 
 
-    private fun handleQrCodePage(json: JSONObject) {
+    private fun handleClientId(json: JSONObject) {
         try {
             clientId = json.getString("client_id")
-            val qrUrl = "$qrCodeUrl?target_id=$clientId"
+            val url = "$startUrl?target_id=$clientId"
 
-            openCustomTab(qrUrl)
+            openCustomTab(url)
 
-            Log.d(TAG, "Opened QR Code Page in Custom Tab: $qrUrl")
+            Log.d(TAG, "Opened QR Code Page in Custom Tab: $url")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to open QR Code Page", e)
         }
